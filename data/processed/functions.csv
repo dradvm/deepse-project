@@ -1,0 +1,1780 @@
+name,code,processed_code
+get_transformer_encoder,"def get_transformer_encoder(bert_config,
+                            sequence_length=None,
+                            transformer_encoder_cls=None,
+                            output_range=None):
+  """"""Gets a 'TransformerEncoder' object.
+
+  Args:
+    bert_config: A 'modeling.BertConfig' or 'modeling.AlbertConfig' object.
+    sequence_length: [Deprecated].
+    transformer_encoder_cls: A EncoderScaffold class. If it is None, uses the
+      default BERT encoder implementation.
+    output_range: the sequence output range, [0, output_range). Default setting
+      is to return the entire sequence output.
+
+  Returns:
+    A encoder object.
+  """"""
+  del sequence_length
+  if transformer_encoder_cls is not None:
+    # TODO(hongkuny): evaluate if it is better to put cfg definition in gin.
+    embedding_cfg = dict(
+        vocab_size=bert_config.vocab_size,
+        type_vocab_size=bert_config.type_vocab_size,
+        hidden_size=bert_config.hidden_size,
+        max_seq_length=bert_config.max_position_embeddings,
+        initializer=tf_keras.initializers.TruncatedNormal(
+            stddev=bert_config.initializer_range),
+        dropout_rate=bert_config.hidden_dropout_prob,
+    )
+    hidden_cfg = dict(
+        num_attention_heads=bert_config.num_attention_heads,
+        intermediate_size=bert_config.intermediate_size,
+        intermediate_activation=tf_utils.get_activation(bert_config.hidden_act),
+        dropout_rate=bert_config.hidden_dropout_prob,
+        attention_dropout_rate=bert_config.attention_probs_dropout_prob,
+        kernel_initializer=tf_keras.initializers.TruncatedNormal(
+            stddev=bert_config.initializer_range),
+    )
+    kwargs = dict(
+        embedding_cfg=embedding_cfg,
+        hidden_cfg=hidden_cfg,
+        num_hidden_instances=bert_config.num_hidden_layers,
+        pooled_output_dim=bert_config.hidden_size,
+        pooler_layer_initializer=tf_keras.initializers.TruncatedNormal(
+            stddev=bert_config.initializer_range))
+
+    # Relies on gin configuration to define the Transformer encoder arguments.
+    return transformer_encoder_cls(**kwargs)
+
+  kwargs = dict(
+      vocab_size=bert_config.vocab_size,
+      hidden_size=bert_config.hidden_size,
+      num_layers=bert_config.num_hidden_layers,
+      num_attention_heads=bert_config.num_attention_heads,
+      intermediate_size=bert_config.intermediate_size,
+      activation=tf_utils.get_activation(bert_config.hidden_act),
+      dropout_rate=bert_config.hidden_dropout_prob,
+      attention_dropout_rate=bert_config.attention_probs_dropout_prob,
+      max_sequence_length=bert_config.max_position_embeddings,
+      type_vocab_size=bert_config.type_vocab_size,
+      embedding_width=bert_config.embedding_size,
+      initializer=tf_keras.initializers.TruncatedNormal(
+          stddev=bert_config.initializer_range))
+  if isinstance(bert_config, albert_configs.AlbertConfig):
+    return networks.AlbertEncoder(**kwargs)
+  else:
+    assert isinstance(bert_config, configs.BertConfig)
+    kwargs['output_range'] = output_range
+    return networks.BertEncoder(**kwargs)","def get_transformer_encoder(bert_config, sequence_length=None, transformer_encoder_cls=None, output_range=None): del sequence_length if transformer_encoder_cls is not None: embedding_cfg = dict( vocab_size=bert_config.vocab_size, type_vocab_size=bert_config.type_vocab_size, hidden_size=bert_config.hidden_size, max_seq_length=bert_config.max_position_embeddings, initializer=tf_keras.initializers.TruncatedNormal( stddev=bert_config.initializer_range), dropout_rate=bert_config.hidden_dropout_prob, ) hidden_cfg = dict( num_attention_heads=bert_config.num_attention_heads, intermediate_size=bert_config.intermediate_size, intermediate_activation=tf_utils.get_activation(bert_config.hidden_act), dropout_rate=bert_config.hidden_dropout_prob, attention_dropout_rate=bert_config.attention_probs_dropout_prob, kernel_initializer=tf_keras.initializers.TruncatedNormal( stddev=bert_config.initializer_range), ) kwargs = dict( embedding_cfg=embedding_cfg, hidden_cfg=hidden_cfg, num_hidden_instances=bert_config.num_hidden_layers, pooled_output_dim=bert_config.hidden_size, pooler_layer_initializer=tf_keras.initializers.TruncatedNormal( stddev=bert_config.initializer_range)) return transformer_encoder_cls(**kwargs) kwargs = dict( vocab_size=bert_config.vocab_size, hidden_size=bert_config.hidden_size, num_layers=bert_config.num_hidden_layers, num_attention_heads=bert_config.num_attention_heads, intermediate_size=bert_config.intermediate_size, activation=tf_utils.get_activation(bert_config.hidden_act), dropout_rate=bert_config.hidden_dropout_prob, attention_dropout_rate=bert_config.attention_probs_dropout_prob, max_sequence_length=bert_config.max_position_embeddings, type_vocab_size=bert_config.type_vocab_size, embedding_width=bert_config.embedding_size, initializer=tf_keras.initializers.TruncatedNormal( stddev=bert_config.initializer_range)) if isinstance(bert_config, albert_configs.AlbertConfig): return networks.AlbertEncoder(**kwargs) else: assert isinstance(bert_config, configs.BertConfig) kwargs['output_range'] = output_range return networks.BertEncoder(**kwargs)"
+pretrain_model,"def pretrain_model(bert_config,
+                   seq_length,
+                   max_predictions_per_seq,
+                   initializer=None,
+                   use_next_sentence_label=True,
+                   return_core_pretrainer_model=False):
+  """"""Returns model to be used for pre-training.
+
+  Args:
+      bert_config: Configuration that defines the core BERT model.
+      seq_length: Maximum sequence length of the training data.
+      max_predictions_per_seq: Maximum number of tokens in sequence to mask out
+        and use for pretraining.
+      initializer: Initializer for weights in BertPretrainer.
+      use_next_sentence_label: Whether to use the next sentence label.
+      return_core_pretrainer_model: Whether to also return the `BertPretrainer`
+        object.
+
+  Returns:
+      A Tuple of (1) Pretraining model, (2) core BERT submodel from which to
+      save weights after pretraining, and (3) optional core `BertPretrainer`
+      object if argument `return_core_pretrainer_model` is True.
+  """"""
+  input_word_ids = tf_keras.layers.Input(
+      shape=(seq_length,), name='input_word_ids', dtype=tf.int32)
+  input_mask = tf_keras.layers.Input(
+      shape=(seq_length,), name='input_mask', dtype=tf.int32)
+  input_type_ids = tf_keras.layers.Input(
+      shape=(seq_length,), name='input_type_ids', dtype=tf.int32)
+  masked_lm_positions = tf_keras.layers.Input(
+      shape=(max_predictions_per_seq,),
+      name='masked_lm_positions',
+      dtype=tf.int32)
+  masked_lm_ids = tf_keras.layers.Input(
+      shape=(max_predictions_per_seq,), name='masked_lm_ids', dtype=tf.int32)
+  masked_lm_weights = tf_keras.layers.Input(
+      shape=(max_predictions_per_seq,),
+      name='masked_lm_weights',
+      dtype=tf.int32)
+
+  if use_next_sentence_label:
+    next_sentence_labels = tf_keras.layers.Input(
+        shape=(1,), name='next_sentence_labels', dtype=tf.int32)
+  else:
+    next_sentence_labels = None
+
+  transformer_encoder = get_transformer_encoder(bert_config, seq_length)
+  if initializer is None:
+    initializer = tf_keras.initializers.TruncatedNormal(
+        stddev=bert_config.initializer_range)
+  pretrainer_model = models.BertPretrainer(
+      network=transformer_encoder,
+      embedding_table=transformer_encoder.get_embedding_table(),
+      num_classes=2,  # The next sentence prediction label has two classes.
+      activation=tf_utils.get_activation(bert_config.hidden_act),
+      num_token_predictions=max_predictions_per_seq,
+      initializer=initializer,
+      output='logits')
+
+  outputs = pretrainer_model(
+      [input_word_ids, input_mask, input_type_ids, masked_lm_positions])
+  lm_output = outputs['masked_lm']
+  sentence_output = outputs['classification']
+  pretrain_loss_layer = BertPretrainLossAndMetricLayer(
+      vocab_size=bert_config.vocab_size)
+  output_loss = pretrain_loss_layer(lm_output, sentence_output, masked_lm_ids,
+                                    masked_lm_weights, next_sentence_labels)
+  inputs = {
+      'input_word_ids': input_word_ids,
+      'input_mask': input_mask,
+      'input_type_ids': input_type_ids,
+      'masked_lm_positions': masked_lm_positions,
+      'masked_lm_ids': masked_lm_ids,
+      'masked_lm_weights': masked_lm_weights,
+  }
+  if use_next_sentence_label:
+    inputs['next_sentence_labels'] = next_sentence_labels
+
+  keras_model = tf_keras.Model(inputs=inputs, outputs=output_loss)
+  if return_core_pretrainer_model:
+    return keras_model, transformer_encoder, pretrainer_model
+  else:
+    return keras_model, transformer_encoder","def pretrain_model(bert_config, seq_length, max_predictions_per_seq, initializer=None, use_next_sentence_label=True, return_core_pretrainer_model=False): input_word_ids = tf_keras.layers.Input( shape=(seq_length,), name='input_word_ids', dtype=tf.int32) input_mask = tf_keras.layers.Input( shape=(seq_length,), name='input_mask', dtype=tf.int32) input_type_ids = tf_keras.layers.Input( shape=(seq_length,), name='input_type_ids', dtype=tf.int32) masked_lm_positions = tf_keras.layers.Input( shape=(max_predictions_per_seq,), name='masked_lm_positions', dtype=tf.int32) masked_lm_ids = tf_keras.layers.Input( shape=(max_predictions_per_seq,), name='masked_lm_ids', dtype=tf.int32) masked_lm_weights = tf_keras.layers.Input( shape=(max_predictions_per_seq,), name='masked_lm_weights', dtype=tf.int32) if use_next_sentence_label: next_sentence_labels = tf_keras.layers.Input( shape=(1,), name='next_sentence_labels', dtype=tf.int32) else: next_sentence_labels = None transformer_encoder = get_transformer_encoder(bert_config, seq_length) if initializer is None: initializer = tf_keras.initializers.TruncatedNormal( stddev=bert_config.initializer_range) pretrainer_model = models.BertPretrainer( network=transformer_encoder, embedding_table=transformer_encoder.get_embedding_table(), num_classes=2, activation=tf_utils.get_activation(bert_config.hidden_act), num_token_predictions=max_predictions_per_seq, initializer=initializer, output='logits') outputs = pretrainer_model( [input_word_ids, input_mask, input_type_ids, masked_lm_positions]) lm_output = outputs['masked_lm'] sentence_output = outputs['classification'] pretrain_loss_layer = BertPretrainLossAndMetricLayer( vocab_size=bert_config.vocab_size) output_loss = pretrain_loss_layer(lm_output, sentence_output, masked_lm_ids, masked_lm_weights, next_sentence_labels) inputs = { 'input_word_ids': input_word_ids, 'input_mask': input_mask, 'input_type_ids': input_type_ids, 'masked_lm_positions': masked_lm_positions, 'masked_lm_ids': masked_lm_ids, 'masked_lm_weights': masked_lm_weights, } if use_next_sentence_label: inputs['next_sentence_labels'] = next_sentence_labels keras_model = tf_keras.Model(inputs=inputs, outputs=output_loss) if return_core_pretrainer_model: return keras_model, transformer_encoder, pretrainer_model else: return keras_model, transformer_encoder"
+squad_model,"def squad_model(bert_config,
+                max_seq_length,
+                initializer=None,
+                hub_module_url=None,
+                hub_module_trainable=True):
+  """"""Returns BERT Squad model along with core BERT model to import weights.
+
+  Args:
+    bert_config: BertConfig, the config defines the core Bert model.
+    max_seq_length: integer, the maximum input sequence length.
+    initializer: Initializer for the final dense layer in the span labeler.
+      Defaulted to TruncatedNormal initializer.
+    hub_module_url: TF-Hub path/url to Bert module.
+    hub_module_trainable: True to finetune layers in the hub module.
+
+  Returns:
+    A tuple of (1) keras model that outputs start logits and end logits and
+    (2) the core BERT transformer encoder.
+  """"""
+  if initializer is None:
+    initializer = tf_keras.initializers.TruncatedNormal(
+        stddev=bert_config.initializer_range)
+  if not hub_module_url:
+    bert_encoder = get_transformer_encoder(bert_config, max_seq_length)
+    return models.BertSpanLabeler(
+        network=bert_encoder, initializer=initializer), bert_encoder
+
+  input_word_ids = tf_keras.layers.Input(
+      shape=(max_seq_length,), dtype=tf.int32, name='input_word_ids')
+  input_mask = tf_keras.layers.Input(
+      shape=(max_seq_length,), dtype=tf.int32, name='input_mask')
+  input_type_ids = tf_keras.layers.Input(
+      shape=(max_seq_length,), dtype=tf.int32, name='input_type_ids')
+  core_model = hub.KerasLayer(hub_module_url, trainable=hub_module_trainable)
+  pooled_output, sequence_output = core_model(
+      [input_word_ids, input_mask, input_type_ids])
+  bert_encoder = tf_keras.Model(
+      inputs={
+          'input_word_ids': input_word_ids,
+          'input_mask': input_mask,
+          'input_type_ids': input_type_ids,
+      },
+      outputs=[sequence_output, pooled_output],
+      name='core_model')
+  return models.BertSpanLabeler(
+      network=bert_encoder, initializer=initializer), bert_encoder","def squad_model(bert_config, max_seq_length, initializer=None, hub_module_url=None, hub_module_trainable=True): if initializer is None: initializer = tf_keras.initializers.TruncatedNormal( stddev=bert_config.initializer_range) if not hub_module_url: bert_encoder = get_transformer_encoder(bert_config, max_seq_length) return models.BertSpanLabeler( network=bert_encoder, initializer=initializer), bert_encoder input_word_ids = tf_keras.layers.Input( shape=(max_seq_length,), dtype=tf.int32, name='input_word_ids') input_mask = tf_keras.layers.Input( shape=(max_seq_length,), dtype=tf.int32, name='input_mask') input_type_ids = tf_keras.layers.Input( shape=(max_seq_length,), dtype=tf.int32, name='input_type_ids') core_model = hub.KerasLayer(hub_module_url, trainable=hub_module_trainable) pooled_output, sequence_output = core_model( [input_word_ids, input_mask, input_type_ids]) bert_encoder = tf_keras.Model( inputs={ 'input_word_ids': input_word_ids, 'input_mask': input_mask, 'input_type_ids': input_type_ids, }, outputs=[sequence_output, pooled_output], name='core_model') return models.BertSpanLabeler( network=bert_encoder, initializer=initializer), bert_encoder"
+classifier_model,"def classifier_model(bert_config,
+                     num_labels,
+                     max_seq_length=None,
+                     final_layer_initializer=None,
+                     hub_module_url=None,
+                     hub_module_trainable=True):
+  """"""BERT classifier model in functional API style.
+
+  Construct a Keras model for predicting `num_labels` outputs from an input with
+  maximum sequence length `max_seq_length`.
+
+  Args:
+    bert_config: BertConfig or AlbertConfig, the config defines the core BERT or
+      ALBERT model.
+    num_labels: integer, the number of classes.
+    max_seq_length: integer, the maximum input sequence length.
+    final_layer_initializer: Initializer for final dense layer. Defaulted
+      TruncatedNormal initializer.
+    hub_module_url: TF-Hub path/url to Bert module.
+    hub_module_trainable: True to finetune layers in the hub module.
+
+  Returns:
+    Combined prediction model (words, mask, type) -> (one-hot labels)
+    BERT sub-model (words, mask, type) -> (bert_outputs)
+  """"""
+  if final_layer_initializer is not None:
+    initializer = final_layer_initializer
+  else:
+    initializer = tf_keras.initializers.TruncatedNormal(
+        stddev=bert_config.initializer_range)
+
+  if not hub_module_url:
+    bert_encoder = get_transformer_encoder(
+        bert_config, max_seq_length, output_range=1)
+    return models.BertClassifier(
+        bert_encoder,
+        num_classes=num_labels,
+        dropout_rate=bert_config.hidden_dropout_prob,
+        initializer=initializer), bert_encoder
+
+  input_word_ids = tf_keras.layers.Input(
+      shape=(max_seq_length,), dtype=tf.int32, name='input_word_ids')
+  input_mask = tf_keras.layers.Input(
+      shape=(max_seq_length,), dtype=tf.int32, name='input_mask')
+  input_type_ids = tf_keras.layers.Input(
+      shape=(max_seq_length,), dtype=tf.int32, name='input_type_ids')
+  bert_model = hub.KerasLayer(hub_module_url, trainable=hub_module_trainable)
+  pooled_output, _ = bert_model([input_word_ids, input_mask, input_type_ids])
+  output = tf_keras.layers.Dropout(rate=bert_config.hidden_dropout_prob)(
+      pooled_output)
+
+  output = tf_keras.layers.Dense(
+      num_labels, kernel_initializer=initializer, name='output')(
+          output)
+  return tf_keras.Model(
+      inputs={
+          'input_word_ids': input_word_ids,
+          'input_mask': input_mask,
+          'input_type_ids': input_type_ids
+      },
+      outputs=output), bert_model","def classifier_model(bert_config, num_labels, max_seq_length=None, final_layer_initializer=None, hub_module_url=None, hub_module_trainable=True): if final_layer_initializer is not None: initializer = final_layer_initializer else: initializer = tf_keras.initializers.TruncatedNormal( stddev=bert_config.initializer_range) if not hub_module_url: bert_encoder = get_transformer_encoder( bert_config, max_seq_length, output_range=1) return models.BertClassifier( bert_encoder, num_classes=num_labels, dropout_rate=bert_config.hidden_dropout_prob, initializer=initializer), bert_encoder input_word_ids = tf_keras.layers.Input( shape=(max_seq_length,), dtype=tf.int32, name='input_word_ids') input_mask = tf_keras.layers.Input( shape=(max_seq_length,), dtype=tf.int32, name='input_mask') input_type_ids = tf_keras.layers.Input( shape=(max_seq_length,), dtype=tf.int32, name='input_type_ids') bert_model = hub.KerasLayer(hub_module_url, trainable=hub_module_trainable) pooled_output, _ = bert_model([input_word_ids, input_mask, input_type_ids]) output = tf_keras.layers.Dropout(rate=bert_config.hidden_dropout_prob)( pooled_output) output = tf_keras.layers.Dense( num_labels, kernel_initializer=initializer, name='output')( output) return tf_keras.Model( inputs={ 'input_word_ids': input_word_ids, 'input_mask': input_mask, 'input_type_ids': input_type_ids }, outputs=output), bert_model"
+__init__,"def __init__(self, vocab_size, **kwargs):
+    super(BertPretrainLossAndMetricLayer, self).__init__(**kwargs)
+    self._vocab_size = vocab_size
+    self.config = {
+        'vocab_size': vocab_size,
+    }","def __init__(self, vocab_size, **kwargs): super(BertPretrainLossAndMetricLayer, self).__init__(**kwargs) self._vocab_size = vocab_size self.config = { 'vocab_size': vocab_size, }"
+_add_metrics,"def _add_metrics(self, lm_output, lm_labels, lm_label_weights,
+                   lm_example_loss, sentence_output, sentence_labels,
+                   next_sentence_loss):
+    """"""Adds metrics.""""""
+    masked_lm_accuracy = tf_keras.metrics.sparse_categorical_accuracy(
+        lm_labels, lm_output)
+    numerator = tf.reduce_sum(masked_lm_accuracy * lm_label_weights)
+    denominator = tf.reduce_sum(lm_label_weights) + 1e-5
+    masked_lm_accuracy = numerator / denominator
+    self.add_metric(
+        masked_lm_accuracy, name='masked_lm_accuracy', aggregation='mean')
+
+    self.add_metric(lm_example_loss, name='lm_example_loss', aggregation='mean')
+
+    if sentence_labels is not None:
+      next_sentence_accuracy = tf_keras.metrics.sparse_categorical_accuracy(
+          sentence_labels, sentence_output)
+      self.add_metric(
+          next_sentence_accuracy,
+          name='next_sentence_accuracy',
+          aggregation='mean')
+
+    if next_sentence_loss is not None:
+      self.add_metric(
+          next_sentence_loss, name='next_sentence_loss', aggregation='mean')","def _add_metrics(self, lm_output, lm_labels, lm_label_weights, lm_example_loss, sentence_output, sentence_labels, next_sentence_loss): masked_lm_accuracy = tf_keras.metrics.sparse_categorical_accuracy( lm_labels, lm_output) numerator = tf.reduce_sum(masked_lm_accuracy * lm_label_weights) denominator = tf.reduce_sum(lm_label_weights) + 1e-5 masked_lm_accuracy = numerator / denominator self.add_metric( masked_lm_accuracy, name='masked_lm_accuracy', aggregation='mean') self.add_metric(lm_example_loss, name='lm_example_loss', aggregation='mean') if sentence_labels is not None: next_sentence_accuracy = tf_keras.metrics.sparse_categorical_accuracy( sentence_labels, sentence_output) self.add_metric( next_sentence_accuracy, name='next_sentence_accuracy', aggregation='mean') if next_sentence_loss is not None: self.add_metric( next_sentence_loss, name='next_sentence_loss', aggregation='mean')"
+call,"def call(self,
+           lm_output_logits,
+           sentence_output_logits,
+           lm_label_ids,
+           lm_label_weights,
+           sentence_labels=None):
+    """"""Implements call() for the layer.""""""
+    lm_label_weights = tf.cast(lm_label_weights, tf.float32)
+    lm_output_logits = tf.cast(lm_output_logits, tf.float32)
+
+    lm_prediction_losses = tf_keras.losses.sparse_categorical_crossentropy(
+        lm_label_ids, lm_output_logits, from_logits=True)
+    lm_numerator_loss = tf.reduce_sum(lm_prediction_losses * lm_label_weights)
+    lm_denominator_loss = tf.reduce_sum(lm_label_weights)
+    mask_label_loss = tf.math.divide_no_nan(lm_numerator_loss,
+                                            lm_denominator_loss)
+
+    if sentence_labels is not None:
+      sentence_output_logits = tf.cast(sentence_output_logits, tf.float32)
+      sentence_loss = tf_keras.losses.sparse_categorical_crossentropy(
+          sentence_labels, sentence_output_logits, from_logits=True)
+      sentence_loss = tf.reduce_mean(sentence_loss)
+      loss = mask_label_loss + sentence_loss
+    else:
+      sentence_loss = None
+      loss = mask_label_loss
+
+    batch_shape = tf.slice(tf.shape(lm_label_ids), [0], [1])
+    # TODO(hongkuny): Avoids the hack and switches add_loss.
+    final_loss = tf.fill(batch_shape, loss)
+
+    self._add_metrics(lm_output_logits, lm_label_ids, lm_label_weights,
+                      mask_label_loss, sentence_output_logits, sentence_labels,
+                      sentence_loss)
+    return final_loss","def call(self, lm_output_logits, sentence_output_logits, lm_label_ids, lm_label_weights, sentence_labels=None): lm_label_weights = tf.cast(lm_label_weights, tf.float32) lm_output_logits = tf.cast(lm_output_logits, tf.float32) lm_prediction_losses = tf_keras.losses.sparse_categorical_crossentropy( lm_label_ids, lm_output_logits, from_logits=True) lm_numerator_loss = tf.reduce_sum(lm_prediction_losses * lm_label_weights) lm_denominator_loss = tf.reduce_sum(lm_label_weights) mask_label_loss = tf.math.divide_no_nan(lm_numerator_loss, lm_denominator_loss) if sentence_labels is not None: sentence_output_logits = tf.cast(sentence_output_logits, tf.float32) sentence_loss = tf_keras.losses.sparse_categorical_crossentropy( sentence_labels, sentence_output_logits, from_logits=True) sentence_loss = tf.reduce_mean(sentence_loss) loss = mask_label_loss + sentence_loss else: sentence_loss = None loss = mask_label_loss batch_shape = tf.slice(tf.shape(lm_label_ids), [0], [1]) final_loss = tf.fill(batch_shape, loss) self._add_metrics(lm_output_logits, lm_label_ids, lm_label_weights, mask_label_loss, sentence_output_logits, sentence_labels, sentence_loss) return final_loss"
+setUp,"def setUp(self):
+    super(BertModelsTest, self).setUp()
+    self._bert_test_config = bert_configs.BertConfig(
+        attention_probs_dropout_prob=0.0,
+        hidden_act='gelu',
+        hidden_dropout_prob=0.0,
+        hidden_size=16,
+        initializer_range=0.02,
+        intermediate_size=32,
+        max_position_embeddings=128,
+        num_attention_heads=2,
+        num_hidden_layers=2,
+        type_vocab_size=2,
+        vocab_size=30522)","def setUp(self): super(BertModelsTest, self).setUp() self._bert_test_config = bert_configs.BertConfig( attention_probs_dropout_prob=0.0, hidden_act='gelu', hidden_dropout_prob=0.0, hidden_size=16, initializer_range=0.02, intermediate_size=32, max_position_embeddings=128, num_attention_heads=2, num_hidden_layers=2, type_vocab_size=2, vocab_size=30522)"
+test_pretrain_model,"def test_pretrain_model(self):
+    model, encoder = bert_models.pretrain_model(
+        self._bert_test_config,
+        seq_length=5,
+        max_predictions_per_seq=2,
+        initializer=None,
+        use_next_sentence_label=True)
+    self.assertIsInstance(model, tf_keras.Model)
+    self.assertIsInstance(encoder, networks.BertEncoder)
+
+    # model has one scalar output: loss value.
+    self.assertEqual(model.output.shape.as_list(), [
+        None,
+    ])
+
+    # Expect two output from encoder: sequence and classification output.
+    self.assertIsInstance(encoder.output, list)
+    self.assertLen(encoder.output, 2)
+    # shape should be [batch size, hidden_size]
+    self.assertEqual(encoder.output[1].shape.as_list(), [None, 16])","def test_pretrain_model(self): model, encoder = bert_models.pretrain_model( self._bert_test_config, seq_length=5, max_predictions_per_seq=2, initializer=None, use_next_sentence_label=True) self.assertIsInstance(model, tf_keras.Model) self.assertIsInstance(encoder, networks.BertEncoder) self.assertEqual(model.output.shape.as_list(), [ None, ]) self.assertIsInstance(encoder.output, list) self.assertLen(encoder.output, 2) self.assertEqual(encoder.output[1].shape.as_list(), [None, 16])"
+test_squad_model,"def test_squad_model(self):
+    model, core_model = bert_models.squad_model(
+        self._bert_test_config,
+        max_seq_length=5,
+        initializer=None,
+        hub_module_url=None,
+        hub_module_trainable=None)
+    self.assertIsInstance(model, tf_keras.Model)
+    self.assertIsInstance(core_model, tf_keras.Model)
+
+    # Expect two output from model: start positions and end positions
+    self.assertIsInstance(model.output, list)
+    self.assertLen(model.output, 2)
+
+    # Expect two output from core_model: sequence and classification output.
+    self.assertIsInstance(core_model.output, list)
+    self.assertLen(core_model.output, 2)
+    # shape should be [batch size, None, hidden_size]
+    self.assertEqual(core_model.output[0].shape.as_list(), [None, None, 16])
+    # shape should be [batch size, hidden_size]
+    self.assertEqual(core_model.output[1].shape.as_list(), [None, 16])","def test_squad_model(self): model, core_model = bert_models.squad_model( self._bert_test_config, max_seq_length=5, initializer=None, hub_module_url=None, hub_module_trainable=None) self.assertIsInstance(model, tf_keras.Model) self.assertIsInstance(core_model, tf_keras.Model) self.assertIsInstance(model.output, list) self.assertLen(model.output, 2) self.assertIsInstance(core_model.output, list) self.assertLen(core_model.output, 2) self.assertEqual(core_model.output[0].shape.as_list(), [None, None, 16]) self.assertEqual(core_model.output[1].shape.as_list(), [None, 16])"
+test_classifier_model,"def test_classifier_model(self):
+    model, core_model = bert_models.classifier_model(
+        self._bert_test_config,
+        num_labels=3,
+        max_seq_length=5,
+        final_layer_initializer=None,
+        hub_module_url=None,
+        hub_module_trainable=None)
+    self.assertIsInstance(model, tf_keras.Model)
+    self.assertIsInstance(core_model, tf_keras.Model)
+
+    # model has one classification output with num_labels=3.
+    self.assertEqual(model.output.shape.as_list(), [None, 3])
+
+    # Expect two output from core_model: sequence and classification output.
+    self.assertIsInstance(core_model.output, list)
+    self.assertLen(core_model.output, 2)
+    # shape should be [batch size, None, hidden_size]
+    self.assertEqual(core_model.output[0].shape.as_list(), [None, None, 16])
+    # shape should be [batch size, hidden_size]
+    self.assertEqual(core_model.output[1].shape.as_list(), [None, 16])","def test_classifier_model(self): model, core_model = bert_models.classifier_model( self._bert_test_config, num_labels=3, max_seq_length=5, final_layer_initializer=None, hub_module_url=None, hub_module_trainable=None) self.assertIsInstance(model, tf_keras.Model) self.assertIsInstance(core_model, tf_keras.Model) self.assertEqual(model.output.shape.as_list(), [None, 3]) self.assertIsInstance(core_model.output, list) self.assertLen(core_model.output, 2) self.assertEqual(core_model.output[0].shape.as_list(), [None, None, 16]) self.assertEqual(core_model.output[1].shape.as_list(), [None, 16])"
+define_common_bert_flags,"def define_common_bert_flags():
+  """"""Define common flags for BERT tasks.""""""
+  flags_core.define_base(
+      data_dir=False,
+      model_dir=True,
+      clean=False,
+      train_epochs=False,
+      epochs_between_evals=False,
+      stop_threshold=False,
+      batch_size=False,
+      num_gpu=True,
+      export_dir=False,
+      distribution_strategy=True,
+      run_eagerly=True)
+  flags_core.define_distribution()
+  flags.DEFINE_string('bert_config_file', None,
+                      'Bert configuration file to define core bert layers.')
+  flags.DEFINE_string(
+      'model_export_path', None,
+      'Path to the directory, where trainined model will be '
+      'exported.')
+  flags.DEFINE_string('tpu', '', 'TPU address to connect to.')
+  flags.DEFINE_string(
+      'init_checkpoint', None,
+      'Initial checkpoint (usually from a pre-trained BERT model).')
+  flags.DEFINE_integer('num_train_epochs', 3,
+                       'Total number of training epochs to perform.')
+  flags.DEFINE_integer(
+      'steps_per_loop', None,
+      'Number of steps per graph-mode loop. Only training step '
+      'happens inside the loop. Callbacks will not be called '
+      'inside. If not set the value will be configured depending on the '
+      'devices available.')
+  flags.DEFINE_float('learning_rate', 5e-5,
+                     'The initial learning rate for Adam.')
+  flags.DEFINE_float('end_lr', 0.0,
+                     'The end learning rate for learning rate decay.')
+  flags.DEFINE_string('optimizer_type', 'adamw',
+                      'The type of optimizer to use for training (adamw|lamb)')
+  flags.DEFINE_boolean(
+      'scale_loss', False,
+      'Whether to divide the loss by number of replica inside the per-replica '
+      'loss function.')
+  flags.DEFINE_boolean(
+      'use_keras_compile_fit', False,
+      'If True, uses Keras compile/fit() API for training logic. Otherwise '
+      'use custom training loop.')
+  flags.DEFINE_string(
+      'hub_module_url', None, 'TF-Hub path/url to Bert module. '
+      'If specified, init_checkpoint flag should not be used.')
+  flags.DEFINE_bool('hub_module_trainable', True,
+                    'True to make keras layers in the hub module trainable.')
+  flags.DEFINE_string(
+      'sub_model_export_name', None,
+      'If set, `sub_model` checkpoints are exported into '
+      'FLAGS.model_dir/FLAGS.sub_model_export_name.')
+  flags.DEFINE_bool('explicit_allreduce', False,
+                    'True to use explicit allreduce instead of the implicit '
+                    'allreduce in optimizer.apply_gradients(). If fp16 mixed '
+                    'precision training is used, this also enables allreduce '
+                    'gradients in fp16.')
+  flags.DEFINE_integer('allreduce_bytes_per_pack', 0,
+                       'Number of bytes of a gradient pack for allreduce. '
+                       'Should be positive integer, if set to 0, all '
+                       'gradients are in one pack. Breaking gradient into '
+                       'packs could enable overlap between allreduce and '
+                       'backprop computation. This flag only takes effect '
+                       'when explicit_allreduce is set to True.')
+
+  flags_core.define_log_steps()
+
+  # Adds flags for mixed precision and multi-worker training.
+  flags_core.define_performance(
+      num_parallel_calls=False,
+      inter_op=False,
+      intra_op=False,
+      synthetic_data=False,
+      max_train_steps=False,
+      dtype=True,
+      loss_scale=True,
+      all_reduce_alg=True,
+      num_packs=False,
+      tf_gpu_thread_mode=True,
+      datasets_num_private_threads=True,
+      enable_xla=True,
+      fp16_implementation=True,
+  )
+
+  # Adds gin configuration flags.
+  hyperparams_flags.define_gin_flags()","def define_common_bert_flags(): flags_core.define_base( data_dir=False, model_dir=True, clean=False, train_epochs=False, epochs_between_evals=False, stop_threshold=False, batch_size=False, num_gpu=True, export_dir=False, distribution_strategy=True, run_eagerly=True) flags_core.define_distribution() flags.DEFINE_string('bert_config_file', None, 'Bert configuration file to define core bert layers.') flags.DEFINE_string( 'model_export_path', None, 'Path to the directory, where trainined model will be ' 'exported.') flags.DEFINE_string('tpu', '', 'TPU address to connect to.') flags.DEFINE_string( 'init_checkpoint', None, 'Initial checkpoint (usually from a pre-trained BERT model).') flags.DEFINE_integer('num_train_epochs', 3, 'Total number of training epochs to perform.') flags.DEFINE_integer( 'steps_per_loop', None, 'Number of steps per graph-mode loop. Only training step ' 'happens inside the loop. Callbacks will not be called ' 'inside. If not set the value will be configured depending on the ' 'devices available.') flags.DEFINE_float('learning_rate', 5e-5, 'The initial learning rate for Adam.') flags.DEFINE_float('end_lr', 0.0, 'The end learning rate for learning rate decay.') flags.DEFINE_string('optimizer_type', 'adamw', 'The type of optimizer to use for training (adamw|lamb)') flags.DEFINE_boolean( 'scale_loss', False, 'Whether to divide the loss by number of replica inside the per-replica ' 'loss function.') flags.DEFINE_boolean( 'use_keras_compile_fit', False, 'If True, uses Keras compile/fit() API for training logic. Otherwise ' 'use custom training loop.') flags.DEFINE_string( 'hub_module_url', None, 'TF-Hub path/url to Bert module. ' 'If specified, init_checkpoint flag should not be used.') flags.DEFINE_bool('hub_module_trainable', True, 'True to make keras layers in the hub module trainable.') flags.DEFINE_string( 'sub_model_export_name', None, 'If set, `sub_model` checkpoints are exported into ' 'FLAGS.model_dir/FLAGS.sub_model_export_name.') flags.DEFINE_bool('explicit_allreduce', False, 'True to use explicit allreduce instead of the implicit ' 'allreduce in optimizer.apply_gradients(). If fp16 mixed ' 'precision training is used, this also enables allreduce ' 'gradients in fp16.') flags.DEFINE_integer('allreduce_bytes_per_pack', 0, 'Number of bytes of a gradient pack for allreduce. ' 'Should be positive integer, if set to 0, all ' 'gradients are in one pack. Breaking gradient into ' 'packs could enable overlap between allreduce and ' 'backprop computation. This flag only takes effect ' 'when explicit_allreduce is set to True.') flags_core.define_log_steps() flags_core.define_performance( num_parallel_calls=False, inter_op=False, intra_op=False, synthetic_data=False, max_train_steps=False, dtype=True, loss_scale=True, all_reduce_alg=True, num_packs=False, tf_gpu_thread_mode=True, datasets_num_private_threads=True, enable_xla=True, fp16_implementation=True, ) hyperparams_flags.define_gin_flags()"
+dtype,"def dtype():
+  return flags_core.get_tf_dtype(flags.FLAGS)",def dtype(): return flags_core.get_tf_dtype(flags.FLAGS)
+use_float16,"def use_float16():
+  return flags_core.get_tf_dtype(flags.FLAGS) == tf.float16",def use_float16(): return flags_core.get_tf_dtype(flags.FLAGS) == tf.float16
+get_loss_scale,"def get_loss_scale():
+  return flags_core.get_loss_scale(flags.FLAGS, default_for_fp16='dynamic')","def get_loss_scale(): return flags_core.get_loss_scale(flags.FLAGS, default_for_fp16='dynamic')"
+__init__,"def __init__(self,
+               vocab_size,
+               hidden_size=768,
+               num_hidden_layers=12,
+               num_attention_heads=12,
+               intermediate_size=3072,
+               hidden_act=""gelu"",
+               hidden_dropout_prob=0.1,
+               attention_probs_dropout_prob=0.1,
+               max_position_embeddings=512,
+               type_vocab_size=16,
+               initializer_range=0.02,
+               embedding_size=None,
+               backward_compatible=True):
+    """"""Constructs BertConfig.
+
+    Args:
+      vocab_size: Vocabulary size of `inputs_ids` in `BertModel`.
+      hidden_size: Size of the encoder layers and the pooler layer.
+      num_hidden_layers: Number of hidden layers in the Transformer encoder.
+      num_attention_heads: Number of attention heads for each attention layer in
+        the Transformer encoder.
+      intermediate_size: The size of the ""intermediate"" (i.e., feed-forward)
+        layer in the Transformer encoder.
+      hidden_act: The non-linear activation function (function or string) in the
+        encoder and pooler.
+      hidden_dropout_prob: The dropout probability for all fully connected
+        layers in the embeddings, encoder, and pooler.
+      attention_probs_dropout_prob: The dropout ratio for the attention
+        probabilities.
+      max_position_embeddings: The maximum sequence length that this model might
+        ever be used with. Typically set this to something large just in case
+        (e.g., 512 or 1024 or 2048).
+      type_vocab_size: The vocabulary size of the `token_type_ids` passed into
+        `BertModel`.
+      initializer_range: The stdev of the truncated_normal_initializer for
+        initializing all weight matrices.
+      embedding_size: (Optional) width of the factorized word embeddings.
+      backward_compatible: Boolean, whether the variables shape are compatible
+        with checkpoints converted from TF 1.x BERT.
+    """"""
+    self.vocab_size = vocab_size
+    self.hidden_size = hidden_size
+    self.num_hidden_layers = num_hidden_layers
+    self.num_attention_heads = num_attention_heads
+    self.hidden_act = hidden_act
+    self.intermediate_size = intermediate_size
+    self.hidden_dropout_prob = hidden_dropout_prob
+    self.attention_probs_dropout_prob = attention_probs_dropout_prob
+    self.max_position_embeddings = max_position_embeddings
+    self.type_vocab_size = type_vocab_size
+    self.initializer_range = initializer_range
+    self.embedding_size = embedding_size
+    self.backward_compatible = backward_compatible","def __init__(self, vocab_size, hidden_size=768, num_hidden_layers=12, num_attention_heads=12, intermediate_size=3072, hidden_act=""gelu"", hidden_dropout_prob=0.1, attention_probs_dropout_prob=0.1, max_position_embeddings=512, type_vocab_size=16, initializer_range=0.02, embedding_size=None, backward_compatible=True): self.vocab_size = vocab_size self.hidden_size = hidden_size self.num_hidden_layers = num_hidden_layers self.num_attention_heads = num_attention_heads self.hidden_act = hidden_act self.intermediate_size = intermediate_size self.hidden_dropout_prob = hidden_dropout_prob self.attention_probs_dropout_prob = attention_probs_dropout_prob self.max_position_embeddings = max_position_embeddings self.type_vocab_size = type_vocab_size self.initializer_range = initializer_range self.embedding_size = embedding_size self.backward_compatible = backward_compatible"
+from_dict,"def from_dict(cls, json_object):
+    """"""Constructs a `BertConfig` from a Python dictionary of parameters.""""""
+    config = BertConfig(vocab_size=None)
+    for (key, value) in six.iteritems(json_object):
+      config.__dict__[key] = value
+    return config","def from_dict(cls, json_object): config = BertConfig(vocab_size=None) for (key, value) in six.iteritems(json_object): config.__dict__[key] = value return config"
+from_json_file,"def from_json_file(cls, json_file):
+    """"""Constructs a `BertConfig` from a json file of parameters.""""""
+    with tf.io.gfile.GFile(json_file, ""r"") as reader:
+      text = reader.read()
+    return cls.from_dict(json.loads(text))","def from_json_file(cls, json_file): with tf.io.gfile.GFile(json_file, ""r"") as reader: text = reader.read() return cls.from_dict(json.loads(text))"
+to_dict,"def to_dict(self):
+    """"""Serializes this instance to a Python dictionary.""""""
+    output = copy.deepcopy(self.__dict__)
+    return output",def to_dict(self): output = copy.deepcopy(self.__dict__) return output
+to_json_string,"def to_json_string(self):
+    """"""Serializes this instance to a JSON string.""""""
+    return json.dumps(self.to_dict(), indent=2, sort_keys=True) + ""\n""","def to_json_string(self): return json.dumps(self.to_dict(), indent=2, sort_keys=True) + ""\n"""
+create_bert_model,"def create_bert_model(bert_config: configs.BertConfig) -> tf_keras.Model:
+  """"""Creates a BERT keras core model from BERT configuration.
+
+  Args:
+    bert_config: A `BertConfig` to create the core model.
+
+  Returns:
+    A keras model.
+  """"""
+  # Adds input layers just as placeholders.
+  input_word_ids = tf_keras.layers.Input(
+      shape=(None,), dtype=tf.int32, name=""input_word_ids"")
+  input_mask = tf_keras.layers.Input(
+      shape=(None,), dtype=tf.int32, name=""input_mask"")
+  input_type_ids = tf_keras.layers.Input(
+      shape=(None,), dtype=tf.int32, name=""input_type_ids"")
+  transformer_encoder = bert_models.get_transformer_encoder(
+      bert_config, sequence_length=None)
+  sequence_output, pooled_output = transformer_encoder(
+      [input_word_ids, input_mask, input_type_ids])
+  # To keep consistent with legacy hub modules, the outputs are
+  # ""pooled_output"" and ""sequence_output"".
+  return tf_keras.Model(
+      inputs=[input_word_ids, input_mask, input_type_ids],
+      outputs=[pooled_output, sequence_output]), transformer_encoder","def create_bert_model(bert_config: configs.BertConfig) -> tf_keras.Model: input_word_ids = tf_keras.layers.Input( shape=(None,), dtype=tf.int32, name=""input_word_ids"") input_mask = tf_keras.layers.Input( shape=(None,), dtype=tf.int32, name=""input_mask"") input_type_ids = tf_keras.layers.Input( shape=(None,), dtype=tf.int32, name=""input_type_ids"") transformer_encoder = bert_models.get_transformer_encoder( bert_config, sequence_length=None) sequence_output, pooled_output = transformer_encoder( [input_word_ids, input_mask, input_type_ids]) return tf_keras.Model( inputs=[input_word_ids, input_mask, input_type_ids], outputs=[pooled_output, sequence_output]), transformer_encoder"
+export_bert_tfhub,"def export_bert_tfhub(bert_config: configs.BertConfig,
+                      model_checkpoint_path: Text,
+                      hub_destination: Text,
+                      vocab_file: Text,
+                      do_lower_case: bool = None):
+  """"""Restores a tf_keras.Model and saves for TF-Hub.""""""
+  # If do_lower_case is not explicit, default to checking whether ""uncased"" is
+  # in the vocab file name
+  if do_lower_case is None:
+    do_lower_case = ""uncased"" in vocab_file
+    logging.info(""Using do_lower_case=%s based on name of vocab_file=%s"",
+                 do_lower_case, vocab_file)
+  core_model, encoder = create_bert_model(bert_config)
+  checkpoint = tf.train.Checkpoint(
+      model=encoder,  # Legacy checkpoints.
+      encoder=encoder)
+  checkpoint.restore(model_checkpoint_path).assert_existing_objects_matched()
+  core_model.vocab_file = tf.saved_model.Asset(vocab_file)
+  core_model.do_lower_case = tf.Variable(do_lower_case, trainable=False)
+  core_model.save(hub_destination, include_optimizer=False, save_format=""tf"")","def export_bert_tfhub(bert_config: configs.BertConfig, model_checkpoint_path: Text, hub_destination: Text, vocab_file: Text, do_lower_case: bool = None): if do_lower_case is None: do_lower_case = ""uncased"" in vocab_file logging.info(""Using do_lower_case=%s based on name of vocab_file=%s"", do_lower_case, vocab_file) core_model, encoder = create_bert_model(bert_config) checkpoint = tf.train.Checkpoint( model=encoder, encoder=encoder) checkpoint.restore(model_checkpoint_path).assert_existing_objects_matched() core_model.vocab_file = tf.saved_model.Asset(vocab_file) core_model.do_lower_case = tf.Variable(do_lower_case, trainable=False) core_model.save(hub_destination, include_optimizer=False, save_format=""tf"")"
+export_bert_squad_tfhub,"def export_bert_squad_tfhub(bert_config: configs.BertConfig,
+                            model_checkpoint_path: Text,
+                            hub_destination: Text,
+                            vocab_file: Text,
+                            do_lower_case: bool = None):
+  """"""Restores a tf_keras.Model for BERT with SQuAD and saves for TF-Hub.""""""
+  # If do_lower_case is not explicit, default to checking whether ""uncased"" is
+  # in the vocab file name
+  if do_lower_case is None:
+    do_lower_case = ""uncased"" in vocab_file
+    logging.info(""Using do_lower_case=%s based on name of vocab_file=%s"",
+                 do_lower_case, vocab_file)
+  span_labeling, _ = bert_models.squad_model(bert_config, max_seq_length=None)
+  checkpoint = tf.train.Checkpoint(model=span_labeling)
+  checkpoint.restore(model_checkpoint_path).assert_existing_objects_matched()
+  span_labeling.vocab_file = tf.saved_model.Asset(vocab_file)
+  span_labeling.do_lower_case = tf.Variable(do_lower_case, trainable=False)
+  span_labeling.save(hub_destination, include_optimizer=False, save_format=""tf"")","def export_bert_squad_tfhub(bert_config: configs.BertConfig, model_checkpoint_path: Text, hub_destination: Text, vocab_file: Text, do_lower_case: bool = None): if do_lower_case is None: do_lower_case = ""uncased"" in vocab_file logging.info(""Using do_lower_case=%s based on name of vocab_file=%s"", do_lower_case, vocab_file) span_labeling, _ = bert_models.squad_model(bert_config, max_seq_length=None) checkpoint = tf.train.Checkpoint(model=span_labeling) checkpoint.restore(model_checkpoint_path).assert_existing_objects_matched() span_labeling.vocab_file = tf.saved_model.Asset(vocab_file) span_labeling.do_lower_case = tf.Variable(do_lower_case, trainable=False) span_labeling.save(hub_destination, include_optimizer=False, save_format=""tf"")"
+main,"def main(_):
+  bert_config = configs.BertConfig.from_json_file(FLAGS.bert_config_file)
+  if FLAGS.model_type == ""encoder"":
+    deprecation_note = (
+        ""nlp/bert/export_tfhub is **DEPRECATED** for exporting BERT encoder ""
+        ""models. Please switch to nlp/tools/export_tfhub for exporting BERT ""
+        ""(and other) encoders with dict inputs/outputs conforming to ""
+        ""https://www.tensorflow.org/hub/common_saved_model_apis/text#transformer-encoders""
+    )
+    logging.error(deprecation_note)
+    print(""\n\nNOTICE:"", deprecation_note, ""\n"")
+    export_bert_tfhub(bert_config, FLAGS.model_checkpoint_path,
+                      FLAGS.export_path, FLAGS.vocab_file, FLAGS.do_lower_case)
+  elif FLAGS.model_type == ""squad"":
+    export_bert_squad_tfhub(bert_config, FLAGS.model_checkpoint_path,
+                            FLAGS.export_path, FLAGS.vocab_file,
+                            FLAGS.do_lower_case)
+  else:
+    raise ValueError(""Unsupported model_type %s."" % FLAGS.model_type)","def main(_): bert_config = configs.BertConfig.from_json_file(FLAGS.bert_config_file) if FLAGS.model_type == ""encoder"": deprecation_note = ( ""nlp/bert/export_tfhub is **DEPRECATED** for exporting BERT encoder "" ""models. Please switch to nlp/tools/export_tfhub for exporting BERT "" ""(and other) encoders with dict inputs/outputs conforming to "" ""https://www.tensorflow.org/hub/common_saved_model_apis/text ) logging.error(deprecation_note) print(""\n\nNOTICE:"", deprecation_note, ""\n"") export_bert_tfhub(bert_config, FLAGS.model_checkpoint_path, FLAGS.export_path, FLAGS.vocab_file, FLAGS.do_lower_case) elif FLAGS.model_type == ""squad"": export_bert_squad_tfhub(bert_config, FLAGS.model_checkpoint_path, FLAGS.export_path, FLAGS.vocab_file, FLAGS.do_lower_case) else: raise ValueError(""Unsupported model_type %s."" % FLAGS.model_type)"
+test_export_tfhub,"def test_export_tfhub(self, ckpt_key_name):
+    # Exports a savedmodel for TF-Hub
+    hidden_size = 16
+    bert_config = configs.BertConfig(
+        vocab_size=100,
+        hidden_size=hidden_size,
+        intermediate_size=32,
+        max_position_embeddings=128,
+        num_attention_heads=2,
+        num_hidden_layers=1)
+    bert_model, encoder = export_tfhub.create_bert_model(bert_config)
+    model_checkpoint_dir = os.path.join(self.get_temp_dir(), ""checkpoint"")
+    checkpoint = tf.train.Checkpoint(**{ckpt_key_name: encoder})
+    checkpoint.save(os.path.join(model_checkpoint_dir, ""test""))
+    model_checkpoint_path = tf.train.latest_checkpoint(model_checkpoint_dir)
+
+    vocab_file = os.path.join(self.get_temp_dir(), ""uncased_vocab.txt"")
+    with tf.io.gfile.GFile(vocab_file, ""w"") as f:
+      f.write(""dummy content"")
+
+    hub_destination = os.path.join(self.get_temp_dir(), ""hub"")
+    export_tfhub.export_bert_tfhub(bert_config, model_checkpoint_path,
+                                   hub_destination, vocab_file)
+
+    # Restores a hub KerasLayer.
+    hub_layer = hub.KerasLayer(hub_destination, trainable=True)
+
+    if hasattr(hub_layer, ""resolved_object""):
+      # Checks meta attributes.
+      self.assertTrue(hub_layer.resolved_object.do_lower_case.numpy())
+      with tf.io.gfile.GFile(
+          hub_layer.resolved_object.vocab_file.asset_path.numpy()) as f:
+        self.assertEqual(""dummy content"", f.read())
+    # Checks the hub KerasLayer.
+    for source_weight, hub_weight in zip(bert_model.trainable_weights,
+                                         hub_layer.trainable_weights):
+      self.assertAllClose(source_weight.numpy(), hub_weight.numpy())
+
+    seq_length = 10
+    dummy_ids = np.zeros((2, seq_length), dtype=np.int32)
+    hub_outputs = hub_layer([dummy_ids, dummy_ids, dummy_ids])
+    source_outputs = bert_model([dummy_ids, dummy_ids, dummy_ids])
+
+    # The outputs of hub module are ""pooled_output"" and ""sequence_output"",
+    # while the outputs of encoder is in reversed order, i.e.,
+    # ""sequence_output"" and ""pooled_output"".
+    encoder_outputs = reversed(encoder([dummy_ids, dummy_ids, dummy_ids]))
+    self.assertEqual(hub_outputs[0].shape, (2, hidden_size))
+    self.assertEqual(hub_outputs[1].shape, (2, seq_length, hidden_size))
+    for source_output, hub_output, encoder_output in zip(
+        source_outputs, hub_outputs, encoder_outputs):
+      self.assertAllClose(source_output.numpy(), hub_output.numpy())
+      self.assertAllClose(source_output.numpy(), encoder_output.numpy())
+
+    # Test that training=True makes a difference (activates dropout).
+    def _dropout_mean_stddev(training, num_runs=20):
+      input_ids = np.array([[14, 12, 42, 95, 99]], np.int32)
+      inputs = [input_ids, np.ones_like(input_ids), np.zeros_like(input_ids)]
+      outputs = np.concatenate(
+          [hub_layer(inputs, training=training)[0] for _ in range(num_runs)])
+      return np.mean(np.std(outputs, axis=0))
+
+    self.assertLess(_dropout_mean_stddev(training=False), 1e-6)
+    self.assertGreater(_dropout_mean_stddev(training=True), 1e-3)
+
+    # Test propagation of seq_length in shape inference.
+    input_word_ids = tf_keras.layers.Input(shape=(seq_length,), dtype=tf.int32)
+    input_mask = tf_keras.layers.Input(shape=(seq_length,), dtype=tf.int32)
+    input_type_ids = tf_keras.layers.Input(shape=(seq_length,), dtype=tf.int32)
+    pooled_output, sequence_output = hub_layer(
+        [input_word_ids, input_mask, input_type_ids])
+    self.assertEqual(pooled_output.shape.as_list(), [None, hidden_size])
+    self.assertEqual(sequence_output.shape.as_list(),
+                     [None, seq_length, hidden_size])","def test_export_tfhub(self, ckpt_key_name): hidden_size = 16 bert_config = configs.BertConfig( vocab_size=100, hidden_size=hidden_size, intermediate_size=32, max_position_embeddings=128, num_attention_heads=2, num_hidden_layers=1) bert_model, encoder = export_tfhub.create_bert_model(bert_config) model_checkpoint_dir = os.path.join(self.get_temp_dir(), ""checkpoint"") checkpoint = tf.train.Checkpoint(**{ckpt_key_name: encoder}) checkpoint.save(os.path.join(model_checkpoint_dir, ""test"")) model_checkpoint_path = tf.train.latest_checkpoint(model_checkpoint_dir) vocab_file = os.path.join(self.get_temp_dir(), ""uncased_vocab.txt"") with tf.io.gfile.GFile(vocab_file, ""w"") as f: f.write(""dummy content"") hub_destination = os.path.join(self.get_temp_dir(), ""hub"") export_tfhub.export_bert_tfhub(bert_config, model_checkpoint_path, hub_destination, vocab_file) hub_layer = hub.KerasLayer(hub_destination, trainable=True) if hasattr(hub_layer, ""resolved_object""): self.assertTrue(hub_layer.resolved_object.do_lower_case.numpy()) with tf.io.gfile.GFile( hub_layer.resolved_object.vocab_file.asset_path.numpy()) as f: self.assertEqual(""dummy content"", f.read()) for source_weight, hub_weight in zip(bert_model.trainable_weights, hub_layer.trainable_weights): self.assertAllClose(source_weight.numpy(), hub_weight.numpy()) seq_length = 10 dummy_ids = np.zeros((2, seq_length), dtype=np.int32) hub_outputs = hub_layer([dummy_ids, dummy_ids, dummy_ids]) source_outputs = bert_model([dummy_ids, dummy_ids, dummy_ids]) encoder_outputs = reversed(encoder([dummy_ids, dummy_ids, dummy_ids])) self.assertEqual(hub_outputs[0].shape, (2, hidden_size)) self.assertEqual(hub_outputs[1].shape, (2, seq_length, hidden_size)) for source_output, hub_output, encoder_output in zip( source_outputs, hub_outputs, encoder_outputs): self.assertAllClose(source_output.numpy(), hub_output.numpy()) self.assertAllClose(source_output.numpy(), encoder_output.numpy()) def _dropout_mean_stddev(training, num_runs=20): input_ids = np.array([[14, 12, 42, 95, 99]], np.int32) inputs = [input_ids, np.ones_like(input_ids), np.zeros_like(input_ids)] outputs = np.concatenate( [hub_layer(inputs, training=training)[0] for _ in range(num_runs)]) return np.mean(np.std(outputs, axis=0)) self.assertLess(_dropout_mean_stddev(training=False), 1e-6) self.assertGreater(_dropout_mean_stddev(training=True), 1e-3) input_word_ids = tf_keras.layers.Input(shape=(seq_length,), dtype=tf.int32) input_mask = tf_keras.layers.Input(shape=(seq_length,), dtype=tf.int32) input_type_ids = tf_keras.layers.Input(shape=(seq_length,), dtype=tf.int32) pooled_output, sequence_output = hub_layer( [input_word_ids, input_mask, input_type_ids]) self.assertEqual(pooled_output.shape.as_list(), [None, hidden_size]) self.assertEqual(sequence_output.shape.as_list(), [None, seq_length, hidden_size])"
+_dropout_mean_stddev,"def _dropout_mean_stddev(training, num_runs=20):
+      input_ids = np.array([[14, 12, 42, 95, 99]], np.int32)
+      inputs = [input_ids, np.ones_like(input_ids), np.zeros_like(input_ids)]
+      outputs = np.concatenate(
+          [hub_layer(inputs, training=training)[0] for _ in range(num_runs)])
+      return np.mean(np.std(outputs, axis=0))","def _dropout_mean_stddev(training, num_runs=20): input_ids = np.array([[14, 12, 42, 95, 99]], np.int32) inputs = [input_ids, np.ones_like(input_ids), np.zeros_like(input_ids)] outputs = np.concatenate( [hub_layer(inputs, training=training)[0] for _ in range(num_runs)]) return np.mean(np.std(outputs, axis=0))"
+decode_record,"def decode_record(record, name_to_features):
+  """"""Decodes a record to a TensorFlow example.""""""
+  example = tf.io.parse_single_example(record, name_to_features)
+
+  # tf.Example only supports tf.int64, but the TPU only supports tf.int32.
+  # So cast all int64 to int32.
+  for name in list(example.keys()):
+    t = example[name]
+    if t.dtype == tf.int64:
+      t = tf.cast(t, tf.int32)
+    example[name] = t
+
+  return example","def decode_record(record, name_to_features): example = tf.io.parse_single_example(record, name_to_features) for name in list(example.keys()): t = example[name] if t.dtype == tf.int64: t = tf.cast(t, tf.int32) example[name] = t return example"
+single_file_dataset,"def single_file_dataset(input_file, name_to_features, num_samples=None):
+  """"""Creates a single-file dataset to be passed for BERT custom training.""""""
+  # For training, we want a lot of parallel reading and shuffling.
+  # For eval, we want no shuffling and parallel reading doesn't matter.
+  d = tf.data.TFRecordDataset(input_file)
+  if num_samples:
+    d = d.take(num_samples)
+  d = d.map(
+      lambda record: decode_record(record, name_to_features),
+      num_parallel_calls=tf.data.experimental.AUTOTUNE)
+
+  # When `input_file` is a path to a single file or a list
+  # containing a single path, disable auto sharding so that
+  # same input file is sent to all workers.
+  if isinstance(input_file, str) or len(input_file) == 1:
+    options = tf.data.Options()
+    options.experimental_distribute.auto_shard_policy = (
+        tf.data.experimental.AutoShardPolicy.OFF)
+    d = d.with_options(options)
+  return d","def single_file_dataset(input_file, name_to_features, num_samples=None): d = tf.data.TFRecordDataset(input_file) if num_samples: d = d.take(num_samples) d = d.map( lambda record: decode_record(record, name_to_features), num_parallel_calls=tf.data.experimental.AUTOTUNE) if isinstance(input_file, str) or len(input_file) == 1: options = tf.data.Options() options.experimental_distribute.auto_shard_policy = ( tf.data.experimental.AutoShardPolicy.OFF) d = d.with_options(options) return d"
+create_pretrain_dataset,"def create_pretrain_dataset(input_patterns,
+                            seq_length,
+                            max_predictions_per_seq,
+                            batch_size,
+                            is_training=True,
+                            input_pipeline_context=None,
+                            use_next_sentence_label=True,
+                            use_position_id=False,
+                            output_fake_labels=True):
+  """"""Creates input dataset from (tf)records files for pretraining.""""""
+  name_to_features = {
+      'input_ids':
+          tf.io.FixedLenFeature([seq_length], tf.int64),
+      'input_mask':
+          tf.io.FixedLenFeature([seq_length], tf.int64),
+      'segment_ids':
+          tf.io.FixedLenFeature([seq_length], tf.int64),
+      'masked_lm_positions':
+          tf.io.FixedLenFeature([max_predictions_per_seq], tf.int64),
+      'masked_lm_ids':
+          tf.io.FixedLenFeature([max_predictions_per_seq], tf.int64),
+      'masked_lm_weights':
+          tf.io.FixedLenFeature([max_predictions_per_seq], tf.float32),
+  }
+  if use_next_sentence_label:
+    name_to_features['next_sentence_labels'] = tf.io.FixedLenFeature([1],
+                                                                     tf.int64)
+  if use_position_id:
+    name_to_features['position_ids'] = tf.io.FixedLenFeature([seq_length],
+                                                             tf.int64)
+  for input_pattern in input_patterns:
+    if not tf.io.gfile.glob(input_pattern):
+      raise ValueError('%s does not match any files.' % input_pattern)
+
+  dataset = tf.data.Dataset.list_files(input_patterns, shuffle=is_training)
+
+  if input_pipeline_context and input_pipeline_context.num_input_pipelines > 1:
+    dataset = dataset.shard(input_pipeline_context.num_input_pipelines,
+                            input_pipeline_context.input_pipeline_id)
+  if is_training:
+    dataset = dataset.repeat()
+
+    # We set shuffle buffer to exactly match total number of
+    # training files to ensure that training data is well shuffled.
+    input_files = []
+    for input_pattern in input_patterns:
+      input_files.extend(tf.io.gfile.glob(input_pattern))
+    dataset = dataset.shuffle(len(input_files))
+
+  # In parallel, create tf record dataset for each train files.
+  # cycle_length = 8 means that up to 8 files will be read and deserialized in
+  # parallel. You may want to increase this number if you have a large number of
+  # CPU cores.
+  dataset = dataset.interleave(
+      tf.data.TFRecordDataset,
+      cycle_length=8,
+      num_parallel_calls=tf.data.experimental.AUTOTUNE)
+
+  if is_training:
+    dataset = dataset.shuffle(100)
+
+  decode_fn = lambda record: decode_record(record, name_to_features)
+  dataset = dataset.map(
+      decode_fn, num_parallel_calls=tf.data.experimental.AUTOTUNE)
+
+  def _select_data_from_record(record):
+    """"""Filter out features to use for pretraining.""""""
+    x = {
+        'input_word_ids': record['input_ids'],
+        'input_mask': record['input_mask'],
+        'input_type_ids': record['segment_ids'],
+        'masked_lm_positions': record['masked_lm_positions'],
+        'masked_lm_ids': record['masked_lm_ids'],
+        'masked_lm_weights': record['masked_lm_weights'],
+    }
+    if use_next_sentence_label:
+      x['next_sentence_labels'] = record['next_sentence_labels']
+    if use_position_id:
+      x['position_ids'] = record['position_ids']
+
+    # TODO(hongkuny): Remove the fake labels after migrating bert pretraining.
+    if output_fake_labels:
+      return (x, record['masked_lm_weights'])
+    else:
+      return x
+
+  dataset = dataset.map(
+      _select_data_from_record,
+      num_parallel_calls=tf.data.experimental.AUTOTUNE)
+  dataset = dataset.batch(batch_size, drop_remainder=is_training)
+  dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
+  return dataset","def create_pretrain_dataset(input_patterns, seq_length, max_predictions_per_seq, batch_size, is_training=True, input_pipeline_context=None, use_next_sentence_label=True, use_position_id=False, output_fake_labels=True): name_to_features = { 'input_ids': tf.io.FixedLenFeature([seq_length], tf.int64), 'input_mask': tf.io.FixedLenFeature([seq_length], tf.int64), 'segment_ids': tf.io.FixedLenFeature([seq_length], tf.int64), 'masked_lm_positions': tf.io.FixedLenFeature([max_predictions_per_seq], tf.int64), 'masked_lm_ids': tf.io.FixedLenFeature([max_predictions_per_seq], tf.int64), 'masked_lm_weights': tf.io.FixedLenFeature([max_predictions_per_seq], tf.float32), } if use_next_sentence_label: name_to_features['next_sentence_labels'] = tf.io.FixedLenFeature([1], tf.int64) if use_position_id: name_to_features['position_ids'] = tf.io.FixedLenFeature([seq_length], tf.int64) for input_pattern in input_patterns: if not tf.io.gfile.glob(input_pattern): raise ValueError('%s does not match any files.' % input_pattern) dataset = tf.data.Dataset.list_files(input_patterns, shuffle=is_training) if input_pipeline_context and input_pipeline_context.num_input_pipelines > 1: dataset = dataset.shard(input_pipeline_context.num_input_pipelines, input_pipeline_context.input_pipeline_id) if is_training: dataset = dataset.repeat() input_files = [] for input_pattern in input_patterns: input_files.extend(tf.io.gfile.glob(input_pattern)) dataset = dataset.shuffle(len(input_files)) dataset = dataset.interleave( tf.data.TFRecordDataset, cycle_length=8, num_parallel_calls=tf.data.experimental.AUTOTUNE) if is_training: dataset = dataset.shuffle(100) decode_fn = lambda record: decode_record(record, name_to_features) dataset = dataset.map( decode_fn, num_parallel_calls=tf.data.experimental.AUTOTUNE) def _select_data_from_record(record): x = { 'input_word_ids': record['input_ids'], 'input_mask': record['input_mask'], 'input_type_ids': record['segment_ids'], 'masked_lm_positions': record['masked_lm_positions'], 'masked_lm_ids': record['masked_lm_ids'], 'masked_lm_weights': record['masked_lm_weights'], } if use_next_sentence_label: x['next_sentence_labels'] = record['next_sentence_labels'] if use_position_id: x['position_ids'] = record['position_ids'] if output_fake_labels: return (x, record['masked_lm_weights']) else: return x dataset = dataset.map( _select_data_from_record, num_parallel_calls=tf.data.experimental.AUTOTUNE) dataset = dataset.batch(batch_size, drop_remainder=is_training) dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE) return dataset"
+create_classifier_dataset,"def create_classifier_dataset(file_path,
+                              seq_length,
+                              batch_size,
+                              is_training=True,
+                              input_pipeline_context=None,
+                              label_type=tf.int64,
+                              include_sample_weights=False,
+                              num_samples=None):
+  """"""Creates input dataset from (tf)records files for train/eval.""""""
+  name_to_features = {
+      'input_ids': tf.io.FixedLenFeature([seq_length], tf.int64),
+      'input_mask': tf.io.FixedLenFeature([seq_length], tf.int64),
+      'segment_ids': tf.io.FixedLenFeature([seq_length], tf.int64),
+      'label_ids': tf.io.FixedLenFeature([], label_type),
+  }
+  if include_sample_weights:
+    name_to_features['weight'] = tf.io.FixedLenFeature([], tf.float32)
+  dataset = single_file_dataset(file_path, name_to_features,
+                                num_samples=num_samples)
+
+  # The dataset is always sharded by number of hosts.
+  # num_input_pipelines is the number of hosts rather than number of cores.
+  if input_pipeline_context and input_pipeline_context.num_input_pipelines > 1:
+    dataset = dataset.shard(input_pipeline_context.num_input_pipelines,
+                            input_pipeline_context.input_pipeline_id)
+
+  def _select_data_from_record(record):
+    x = {
+        'input_word_ids': record['input_ids'],
+        'input_mask': record['input_mask'],
+        'input_type_ids': record['segment_ids']
+    }
+    y = record['label_ids']
+    if include_sample_weights:
+      w = record['weight']
+      return (x, y, w)
+    return (x, y)
+
+  if is_training:
+    dataset = dataset.shuffle(100)
+    dataset = dataset.repeat()
+
+  dataset = dataset.map(
+      _select_data_from_record,
+      num_parallel_calls=tf.data.experimental.AUTOTUNE)
+  dataset = dataset.batch(batch_size, drop_remainder=is_training)
+  dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
+  return dataset","def create_classifier_dataset(file_path, seq_length, batch_size, is_training=True, input_pipeline_context=None, label_type=tf.int64, include_sample_weights=False, num_samples=None): name_to_features = { 'input_ids': tf.io.FixedLenFeature([seq_length], tf.int64), 'input_mask': tf.io.FixedLenFeature([seq_length], tf.int64), 'segment_ids': tf.io.FixedLenFeature([seq_length], tf.int64), 'label_ids': tf.io.FixedLenFeature([], label_type), } if include_sample_weights: name_to_features['weight'] = tf.io.FixedLenFeature([], tf.float32) dataset = single_file_dataset(file_path, name_to_features, num_samples=num_samples) if input_pipeline_context and input_pipeline_context.num_input_pipelines > 1: dataset = dataset.shard(input_pipeline_context.num_input_pipelines, input_pipeline_context.input_pipeline_id) def _select_data_from_record(record): x = { 'input_word_ids': record['input_ids'], 'input_mask': record['input_mask'], 'input_type_ids': record['segment_ids'] } y = record['label_ids'] if include_sample_weights: w = record['weight'] return (x, y, w) return (x, y) if is_training: dataset = dataset.shuffle(100) dataset = dataset.repeat() dataset = dataset.map( _select_data_from_record, num_parallel_calls=tf.data.experimental.AUTOTUNE) dataset = dataset.batch(batch_size, drop_remainder=is_training) dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE) return dataset"
+create_squad_dataset,"def create_squad_dataset(file_path,
+                         seq_length,
+                         batch_size,
+                         is_training=True,
+                         input_pipeline_context=None):
+  """"""Creates input dataset from (tf)records files for train/eval.""""""
+  name_to_features = {
+      'input_ids': tf.io.FixedLenFeature([seq_length], tf.int64),
+      'input_mask': tf.io.FixedLenFeature([seq_length], tf.int64),
+      'segment_ids': tf.io.FixedLenFeature([seq_length], tf.int64),
+  }
+  if is_training:
+    name_to_features['start_positions'] = tf.io.FixedLenFeature([], tf.int64)
+    name_to_features['end_positions'] = tf.io.FixedLenFeature([], tf.int64)
+  else:
+    name_to_features['unique_ids'] = tf.io.FixedLenFeature([], tf.int64)
+
+  dataset = single_file_dataset(file_path, name_to_features)
+
+  # The dataset is always sharded by number of hosts.
+  # num_input_pipelines is the number of hosts rather than number of cores.
+  if input_pipeline_context and input_pipeline_context.num_input_pipelines > 1:
+    dataset = dataset.shard(input_pipeline_context.num_input_pipelines,
+                            input_pipeline_context.input_pipeline_id)
+
+  def _select_data_from_record(record):
+    """"""Dispatches record to features and labels.""""""
+    x, y = {}, {}
+    for name, tensor in record.items():
+      if name in ('start_positions', 'end_positions'):
+        y[name] = tensor
+      elif name == 'input_ids':
+        x['input_word_ids'] = tensor
+      elif name == 'segment_ids':
+        x['input_type_ids'] = tensor
+      else:
+        x[name] = tensor
+    return (x, y)
+
+  if is_training:
+    dataset = dataset.shuffle(100)
+    dataset = dataset.repeat()
+
+  dataset = dataset.map(
+      _select_data_from_record,
+      num_parallel_calls=tf.data.experimental.AUTOTUNE)
+  dataset = dataset.batch(batch_size, drop_remainder=True)
+  dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
+  return dataset","def create_squad_dataset(file_path, seq_length, batch_size, is_training=True, input_pipeline_context=None): name_to_features = { 'input_ids': tf.io.FixedLenFeature([seq_length], tf.int64), 'input_mask': tf.io.FixedLenFeature([seq_length], tf.int64), 'segment_ids': tf.io.FixedLenFeature([seq_length], tf.int64), } if is_training: name_to_features['start_positions'] = tf.io.FixedLenFeature([], tf.int64) name_to_features['end_positions'] = tf.io.FixedLenFeature([], tf.int64) else: name_to_features['unique_ids'] = tf.io.FixedLenFeature([], tf.int64) dataset = single_file_dataset(file_path, name_to_features) if input_pipeline_context and input_pipeline_context.num_input_pipelines > 1: dataset = dataset.shard(input_pipeline_context.num_input_pipelines, input_pipeline_context.input_pipeline_id) def _select_data_from_record(record): x, y = {}, {} for name, tensor in record.items(): if name in ('start_positions', 'end_positions'): y[name] = tensor elif name == 'input_ids': x['input_word_ids'] = tensor elif name == 'segment_ids': x['input_type_ids'] = tensor else: x[name] = tensor return (x, y) if is_training: dataset = dataset.shuffle(100) dataset = dataset.repeat() dataset = dataset.map( _select_data_from_record, num_parallel_calls=tf.data.experimental.AUTOTUNE) dataset = dataset.batch(batch_size, drop_remainder=True) dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE) return dataset"
+create_retrieval_dataset,"def create_retrieval_dataset(file_path,
+                             seq_length,
+                             batch_size,
+                             input_pipeline_context=None):
+  """"""Creates input dataset from (tf)records files for scoring.""""""
+  name_to_features = {
+      'input_ids': tf.io.FixedLenFeature([seq_length], tf.int64),
+      'input_mask': tf.io.FixedLenFeature([seq_length], tf.int64),
+      'segment_ids': tf.io.FixedLenFeature([seq_length], tf.int64),
+      'example_id': tf.io.FixedLenFeature([1], tf.int64),
+  }
+  dataset = single_file_dataset(file_path, name_to_features)
+
+  # The dataset is always sharded by number of hosts.
+  # num_input_pipelines is the number of hosts rather than number of cores.
+  if input_pipeline_context and input_pipeline_context.num_input_pipelines > 1:
+    dataset = dataset.shard(input_pipeline_context.num_input_pipelines,
+                            input_pipeline_context.input_pipeline_id)
+
+  def _select_data_from_record(record):
+    x = {
+        'input_word_ids': record['input_ids'],
+        'input_mask': record['input_mask'],
+        'input_type_ids': record['segment_ids']
+    }
+    y = record['example_id']
+    return (x, y)
+
+  dataset = dataset.map(
+      _select_data_from_record,
+      num_parallel_calls=tf.data.experimental.AUTOTUNE)
+  dataset = dataset.batch(batch_size, drop_remainder=False)
+
+  def _pad_to_batch(x, y):
+    cur_size = tf.shape(y)[0]
+    pad_size = batch_size - cur_size
+
+    pad_ids = tf.zeros(shape=[pad_size, seq_length], dtype=tf.int32)
+    for key in ('input_word_ids', 'input_mask', 'input_type_ids'):
+      x[key] = tf.concat([x[key], pad_ids], axis=0)
+
+    pad_labels = -tf.ones(shape=[pad_size, 1], dtype=tf.int32)
+    y = tf.concat([y, pad_labels], axis=0)
+    return x, y
+
+  dataset = dataset.map(
+      _pad_to_batch,
+      num_parallel_calls=tf.data.experimental.AUTOTUNE)
+
+  dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE)
+  return dataset","def create_retrieval_dataset(file_path, seq_length, batch_size, input_pipeline_context=None): name_to_features = { 'input_ids': tf.io.FixedLenFeature([seq_length], tf.int64), 'input_mask': tf.io.FixedLenFeature([seq_length], tf.int64), 'segment_ids': tf.io.FixedLenFeature([seq_length], tf.int64), 'example_id': tf.io.FixedLenFeature([1], tf.int64), } dataset = single_file_dataset(file_path, name_to_features) if input_pipeline_context and input_pipeline_context.num_input_pipelines > 1: dataset = dataset.shard(input_pipeline_context.num_input_pipelines, input_pipeline_context.input_pipeline_id) def _select_data_from_record(record): x = { 'input_word_ids': record['input_ids'], 'input_mask': record['input_mask'], 'input_type_ids': record['segment_ids'] } y = record['example_id'] return (x, y) dataset = dataset.map( _select_data_from_record, num_parallel_calls=tf.data.experimental.AUTOTUNE) dataset = dataset.batch(batch_size, drop_remainder=False) def _pad_to_batch(x, y): cur_size = tf.shape(y)[0] pad_size = batch_size - cur_size pad_ids = tf.zeros(shape=[pad_size, seq_length], dtype=tf.int32) for key in ('input_word_ids', 'input_mask', 'input_type_ids'): x[key] = tf.concat([x[key], pad_ids], axis=0) pad_labels = -tf.ones(shape=[pad_size, 1], dtype=tf.int32) y = tf.concat([y, pad_labels], axis=0) return x, y dataset = dataset.map( _pad_to_batch, num_parallel_calls=tf.data.experimental.AUTOTUNE) dataset = dataset.prefetch(tf.data.experimental.AUTOTUNE) return dataset"
+_select_data_from_record,"def _select_data_from_record(record):
+    """"""Filter out features to use for pretraining.""""""
+    x = {
+        'input_word_ids': record['input_ids'],
+        'input_mask': record['input_mask'],
+        'input_type_ids': record['segment_ids'],
+        'masked_lm_positions': record['masked_lm_positions'],
+        'masked_lm_ids': record['masked_lm_ids'],
+        'masked_lm_weights': record['masked_lm_weights'],
+    }
+    if use_next_sentence_label:
+      x['next_sentence_labels'] = record['next_sentence_labels']
+    if use_position_id:
+      x['position_ids'] = record['position_ids']
+
+    # TODO(hongkuny): Remove the fake labels after migrating bert pretraining.
+    if output_fake_labels:
+      return (x, record['masked_lm_weights'])
+    else:
+      return x","def _select_data_from_record(record): x = { 'input_word_ids': record['input_ids'], 'input_mask': record['input_mask'], 'input_type_ids': record['segment_ids'], 'masked_lm_positions': record['masked_lm_positions'], 'masked_lm_ids': record['masked_lm_ids'], 'masked_lm_weights': record['masked_lm_weights'], } if use_next_sentence_label: x['next_sentence_labels'] = record['next_sentence_labels'] if use_position_id: x['position_ids'] = record['position_ids'] if output_fake_labels: return (x, record['masked_lm_weights']) else: return x"
+_select_data_from_record,"def _select_data_from_record(record):
+    x = {
+        'input_word_ids': record['input_ids'],
+        'input_mask': record['input_mask'],
+        'input_type_ids': record['segment_ids']
+    }
+    y = record['label_ids']
+    if include_sample_weights:
+      w = record['weight']
+      return (x, y, w)
+    return (x, y)","def _select_data_from_record(record): x = { 'input_word_ids': record['input_ids'], 'input_mask': record['input_mask'], 'input_type_ids': record['segment_ids'] } y = record['label_ids'] if include_sample_weights: w = record['weight'] return (x, y, w) return (x, y)"
+_select_data_from_record,"def _select_data_from_record(record):
+    """"""Dispatches record to features and labels.""""""
+    x, y = {}, {}
+    for name, tensor in record.items():
+      if name in ('start_positions', 'end_positions'):
+        y[name] = tensor
+      elif name == 'input_ids':
+        x['input_word_ids'] = tensor
+      elif name == 'segment_ids':
+        x['input_type_ids'] = tensor
+      else:
+        x[name] = tensor
+    return (x, y)","def _select_data_from_record(record): x, y = {}, {} for name, tensor in record.items(): if name in ('start_positions', 'end_positions'): y[name] = tensor elif name == 'input_ids': x['input_word_ids'] = tensor elif name == 'segment_ids': x['input_type_ids'] = tensor else: x[name] = tensor return (x, y)"
+_select_data_from_record,"def _select_data_from_record(record):
+    x = {
+        'input_word_ids': record['input_ids'],
+        'input_mask': record['input_mask'],
+        'input_type_ids': record['segment_ids']
+    }
+    y = record['example_id']
+    return (x, y)","def _select_data_from_record(record): x = { 'input_word_ids': record['input_ids'], 'input_mask': record['input_mask'], 'input_type_ids': record['segment_ids'] } y = record['example_id'] return (x, y)"
+_pad_to_batch,"def _pad_to_batch(x, y):
+    cur_size = tf.shape(y)[0]
+    pad_size = batch_size - cur_size
+
+    pad_ids = tf.zeros(shape=[pad_size, seq_length], dtype=tf.int32)
+    for key in ('input_word_ids', 'input_mask', 'input_type_ids'):
+      x[key] = tf.concat([x[key], pad_ids], axis=0)
+
+    pad_labels = -tf.ones(shape=[pad_size, 1], dtype=tf.int32)
+    y = tf.concat([y, pad_labels], axis=0)
+    return x, y","def _pad_to_batch(x, y): cur_size = tf.shape(y)[0] pad_size = batch_size - cur_size pad_ids = tf.zeros(shape=[pad_size, seq_length], dtype=tf.int32) for key in ('input_word_ids', 'input_mask', 'input_type_ids'): x[key] = tf.concat([x[key], pad_ids], axis=0) pad_labels = -tf.ones(shape=[pad_size, 1], dtype=tf.int32) y = tf.concat([y, pad_labels], axis=0) return x, y"
+export_bert_model,"def export_bert_model(model_export_path: typing.Text,
+                      model: tf_keras.Model,
+                      checkpoint_dir: typing.Optional[typing.Text] = None,
+                      restore_model_using_load_weights: bool = False) -> None:
+  """"""Export BERT model for serving which does not include the optimizer.
+
+  Args:
+      model_export_path: Path to which exported model will be saved.
+      model: Keras model object to export.
+      checkpoint_dir: Path from which model weights will be loaded, if
+        specified.
+      restore_model_using_load_weights: Whether to use checkpoint.restore() API
+        for custom checkpoint or to use model.load_weights() API. There are 2
+        different ways to save checkpoints. One is using tf.train.Checkpoint and
+        another is using Keras model.save_weights(). Custom training loop
+        implementation uses tf.train.Checkpoint API and Keras ModelCheckpoint
+        callback internally uses model.save_weights() API. Since these two API's
+        cannot be used toghether, model loading logic must be take into account
+        how model checkpoint was saved.
+
+  Raises:
+    ValueError when either model_export_path or model is not specified.
+  """"""
+  if not model_export_path:
+    raise ValueError('model_export_path must be specified.')
+  if not isinstance(model, tf_keras.Model):
+    raise ValueError('model must be a tf_keras.Model object.')
+
+  if checkpoint_dir:
+    if restore_model_using_load_weights:
+      model_weight_path = os.path.join(checkpoint_dir, 'checkpoint')
+      assert tf.io.gfile.exists(model_weight_path)
+      model.load_weights(model_weight_path)
+    else:
+      checkpoint = tf.train.Checkpoint(model=model)
+
+      # Restores the model from latest checkpoint.
+      latest_checkpoint_file = tf.train.latest_checkpoint(checkpoint_dir)
+      assert latest_checkpoint_file
+      logging.info('Checkpoint file %s found and restoring from '
+                   'checkpoint', latest_checkpoint_file)
+      checkpoint.restore(
+          latest_checkpoint_file).assert_existing_objects_matched()
+
+  model.save(model_export_path, include_optimizer=False, save_format='tf')","def export_bert_model(model_export_path: typing.Text, model: tf_keras.Model, checkpoint_dir: typing.Optional[typing.Text] = None, restore_model_using_load_weights: bool = False) -> None: if not model_export_path: raise ValueError('model_export_path must be specified.') if not isinstance(model, tf_keras.Model): raise ValueError('model must be a tf_keras.Model object.') if checkpoint_dir: if restore_model_using_load_weights: model_weight_path = os.path.join(checkpoint_dir, 'checkpoint') assert tf.io.gfile.exists(model_weight_path) model.load_weights(model_weight_path) else: checkpoint = tf.train.Checkpoint(model=model) latest_checkpoint_file = tf.train.latest_checkpoint(checkpoint_dir) assert latest_checkpoint_file logging.info('Checkpoint file %s found and restoring from ' 'checkpoint', latest_checkpoint_file) checkpoint.restore( latest_checkpoint_file).assert_existing_objects_matched() model.save(model_export_path, include_optimizer=False, save_format='tf')"
+_should_export_checkpoint,"def _should_export_checkpoint(strategy):
+  return (not strategy) or strategy.extended.should_checkpoint",def _should_export_checkpoint(strategy): return (not strategy) or strategy.extended.should_checkpoint
+_should_export_summary,"def _should_export_summary(strategy):
+  return (not strategy) or strategy.extended.should_save_summary",def _should_export_summary(strategy): return (not strategy) or strategy.extended.should_save_summary
+_save_checkpoint,"def _save_checkpoint(strategy, checkpoint, model_dir, checkpoint_prefix):
+  """"""Saves model to with provided checkpoint prefix.""""""
+
+  if _should_export_checkpoint(strategy):
+    checkpoint_path = os.path.join(model_dir, checkpoint_prefix)
+    saved_path = checkpoint.save(checkpoint_path)
+    logging.info('Saving model as TF checkpoint: %s', saved_path)
+  else:
+    # In multi worker training we need every worker to save checkpoint, because
+    # variables can trigger synchronization on read and synchronization needs
+    # all workers to participate. To avoid workers overriding each other we save
+    # to a temporary directory on non-chief workers.
+    tmp_dir = tempfile.mkdtemp()
+    checkpoint.save(os.path.join(tmp_dir, 'ckpt'))
+    tf.io.gfile.rmtree(tmp_dir)
+  return","def _save_checkpoint(strategy, checkpoint, model_dir, checkpoint_prefix): if _should_export_checkpoint(strategy): checkpoint_path = os.path.join(model_dir, checkpoint_prefix) saved_path = checkpoint.save(checkpoint_path) logging.info('Saving model as TF checkpoint: %s', saved_path) else: tmp_dir = tempfile.mkdtemp() checkpoint.save(os.path.join(tmp_dir, 'ckpt')) tf.io.gfile.rmtree(tmp_dir) return"
+_get_input_iterator,"def _get_input_iterator(input_fn, strategy):
+  """"""Returns distributed dataset iterator.""""""
+  # When training with TPU pods, datasets needs to be cloned across
+  # workers. Since Dataset instance cannot be cloned in eager mode, we instead
+  # pass callable that returns a dataset.
+  if not callable(input_fn):
+    raise ValueError('`input_fn` should be a closure that returns a dataset.')
+  iterator = iter(strategy.distribute_datasets_from_function(input_fn))
+  return iterator","def _get_input_iterator(input_fn, strategy): if not callable(input_fn): raise ValueError('`input_fn` should be a closure that returns a dataset.') iterator = iter(strategy.distribute_datasets_from_function(input_fn)) return iterator"
+_float_metric_value,"def _float_metric_value(metric):
+  """"""Gets the value of a float-value keras metric.""""""
+  return metric.result().numpy().astype(float)",def _float_metric_value(metric): return metric.result().numpy().astype(float)
+clip_by_global_norm_callback,"def clip_by_global_norm_callback(grads_and_vars):
+  """"""Performs gradient clipping.""""""
+  grads, variables = zip(*grads_and_vars)
+  (clipped_grads, _) = tf.clip_by_global_norm(grads, clip_norm=1.0)
+  return zip(clipped_grads, variables)","def clip_by_global_norm_callback(grads_and_vars): grads, variables = zip(*grads_and_vars) (clipped_grads, _) = tf.clip_by_global_norm(grads, clip_norm=1.0) return zip(clipped_grads, variables)"
+steps_to_run,"def steps_to_run(current_step, steps_per_epoch, steps_per_loop):
+  """"""Calculates steps to run on device.""""""
+  if steps_per_loop <= 0:
+    raise ValueError('steps_per_loop should be positive integer.')
+  if steps_per_loop == 1:
+    return steps_per_loop
+  remainder_in_epoch = current_step % steps_per_epoch
+  if remainder_in_epoch != 0:
+    return min(steps_per_epoch - remainder_in_epoch, steps_per_loop)
+  else:
+    return steps_per_loop","def steps_to_run(current_step, steps_per_epoch, steps_per_loop): if steps_per_loop <= 0: raise ValueError('steps_per_loop should be positive integer.') if steps_per_loop == 1: return steps_per_loop remainder_in_epoch = current_step % steps_per_epoch if remainder_in_epoch != 0: return min(steps_per_epoch - remainder_in_epoch, steps_per_loop) else: return steps_per_loop"
+write_txt_summary,"def write_txt_summary(training_summary, summary_dir):
+  """"""Writes a summary text file to record stats.""""""
+  if not tf.io.gfile.exists(summary_dir):
+    tf.io.gfile.mkdir(summary_dir)
+  summary_path = os.path.join(summary_dir, _SUMMARY_TXT)
+  with tf.io.gfile.GFile(summary_path, 'wb') as f:
+    logging.info('Training Summary: \n%s', str(training_summary))
+    f.write(json.dumps(training_summary, indent=4))","def write_txt_summary(training_summary, summary_dir): if not tf.io.gfile.exists(summary_dir): tf.io.gfile.mkdir(summary_dir) summary_path = os.path.join(summary_dir, _SUMMARY_TXT) with tf.io.gfile.GFile(summary_path, 'wb') as f: logging.info('Training Summary: \n%s', str(training_summary)) f.write(json.dumps(training_summary, indent=4))"
+run_customized_training_loop,"def run_customized_training_loop(
+    # pylint: disable=invalid-name
+    _sentinel=None,
+    # pylint: enable=invalid-name
+    strategy=None,
+    model_fn=None,
+    loss_fn=None,
+    scale_loss=True,
+    model_dir=None,
+    train_input_fn=None,
+    steps_per_epoch=None,
+    num_eval_per_epoch=1,
+    steps_per_loop=None,
+    epochs=1,
+    eval_input_fn=None,
+    eval_steps=None,
+    metric_fn=None,
+    init_checkpoint=None,
+    custom_callbacks=None,
+    run_eagerly=False,
+    sub_model_export_name=None,
+    explicit_allreduce=False,
+    pre_allreduce_callbacks=None,
+    post_allreduce_callbacks=None,
+    train_summary_interval=0,
+    allreduce_bytes_per_pack=0):
+  """"""Run BERT pretrain model training using low-level API.
+
+  Args:
+      _sentinel: Used to prevent positional parameters. Internal, do not use.
+      strategy: Distribution strategy on which to run low level training loop.
+      model_fn: Function that returns a tuple (model, sub_model). Caller of this
+        function should add optimizer to the `model` via calling
+        `model.compile()` API or manually setting `model.optimizer` attribute.
+        Second element of the returned tuple(sub_model) is an optional sub model
+        to be used for initial checkpoint -- if provided.
+      loss_fn: Function with signature func(labels, logits) and returns a loss
+        tensor.
+      scale_loss: Whether to divide the raw loss by number of replicas before
+        gradients calculation.
+      model_dir: Model directory used during training for restoring/saving model
+        weights.
+      train_input_fn: Function that returns a tf.data.Dataset used for training.
+      steps_per_epoch: Number of steps to run per epoch. At the end of each
+        epoch, model checkpoint will be saved and evaluation will be conducted
+        if evaluation dataset is provided.
+      num_eval_per_epoch: Number of evaluations per epoch.
+      steps_per_loop: Number of steps per graph-mode loop. In order to reduce
+        communication in eager context, training logs are printed every
+        steps_per_loop.
+      epochs: Number of epochs to train.
+      eval_input_fn: Function that returns evaluation dataset. If none,
+        evaluation is skipped.
+      eval_steps: Number of steps to run evaluation. Required if `eval_input_fn`
+        is not none.
+      metric_fn: A metrics function that returns either a Keras Metric object or
+        a list of Keras Metric objects to record evaluation result using
+        evaluation dataset or with training dataset after every epoch.
+      init_checkpoint: Optional checkpoint to load to `sub_model` returned by
+        `model_fn`.
+      custom_callbacks: A list of Keras Callbacks objects to run during
+        training. More specifically, `on_train_begin(), on_train_end(),
+        on_batch_begin()`, `on_batch_end()`, `on_epoch_begin()`,
+        `on_epoch_end()` methods are invoked during training. Note that some
+        metrics may be missing from `logs`.
+      run_eagerly: Whether to run model training in pure eager execution. This
+        should be disable for TPUStrategy.
+      sub_model_export_name: If not None, will export `sub_model` returned by
+        `model_fn` into checkpoint files. The name of intermediate checkpoint
+        file is {sub_model_export_name}_step_{step}.ckpt and the last
+        checkpint's name is {sub_model_export_name}.ckpt; if None, `sub_model`
+        will not be exported as checkpoint.
+      explicit_allreduce: Whether to explicitly perform gradient allreduce,
+        instead of relying on implicit allreduce in optimizer.apply_gradients().
+        default is False. For now, if training using FP16 mixed precision,
+        explicit allreduce will aggregate gradients in FP16 format. For TPU and
+        GPU training using FP32, explicit allreduce will aggregate gradients in
+        FP32 format.
+      pre_allreduce_callbacks: A list of callback functions that takes gradients
+        and model variables pairs as input, manipulate them, and returns a new
+        gradients and model variables paris. The callback functions will be
+        invoked in the list order and before gradients are allreduced. With
+        mixed precision training, the pre_allreduce_allbacks will be applied on
+        scaled_gradients. Default is no callbacks. Only used when
+        explicit_allreduce=True.
+      post_allreduce_callbacks: A list of callback functions that takes
+        gradients and model variables pairs as input, manipulate them, and
+        returns a new gradients and model variables paris. The callback
+        functions will be invoked in the list order and right before gradients
+        are applied to variables for updates. Default is no callbacks. Only used
+        when explicit_allreduce=True.
+      train_summary_interval: Step interval for training summaries. If the value
+        is a negative number, then training summaries are not enabled.
+      allreduce_bytes_per_pack: A non-negative integer. Breaks collective
+        operations into packs of certain size. If it's zero, all gradients are
+        in one pack. Breaking gradient into packs could enable overlap between
+        allreduce and backprop computation. This flag only takes effect when
+        explicit_allreduce is set to True.'
+
+  Returns:
+      Trained model.
+
+  Raises:
+      ValueError: (1) When model returned by `model_fn` does not have optimizer
+        attribute or when required parameters are set to none. (2) eval args are
+        not specified correctly. (3) metric_fn must be a callable if specified.
+        (4) sub_model_checkpoint_name is specified, but `sub_model` returned
+        by `model_fn` is None.
+  """"""
+
+  if _sentinel is not None:
+    raise ValueError('only call `run_customized_training_loop()` '
+                     'with named arguments.')
+
+  required_arguments = [
+      strategy, model_fn, loss_fn, model_dir, steps_per_epoch, train_input_fn
+  ]
+
+  steps_between_evals = int(steps_per_epoch / num_eval_per_epoch)
+  if [arg for arg in required_arguments if arg is None]:
+    raise ValueError('`strategy`, `model_fn`, `loss_fn`, `model_dir`, '
+                     '`steps_per_epoch` and `train_input_fn` are required '
+                     'parameters.')
+  if not steps_per_loop:
+    if tf.config.list_logical_devices('TPU'):
+      # One can't fully utilize a TPU with steps_per_loop=1, so in this case
+      # default users to a more useful value.
+      steps_per_loop = min(1000, steps_between_evals)
+    else:
+      steps_per_loop = 1
+    logging.info('steps_per_loop not specified. Using steps_per_loop=%d',
+                 steps_per_loop)
+  if steps_per_loop > steps_between_evals:
+    logging.warning(
+        'steps_per_loop: %d is specified to be greater than '
+        ' steps_between_evals: %d, we will use steps_between_evals as'
+        ' steps_per_loop.', steps_per_loop, steps_between_evals)
+    steps_per_loop = steps_between_evals
+  assert tf.executing_eagerly()
+
+  if run_eagerly:
+    if isinstance(
+        strategy,
+        (tf.distribute.TPUStrategy, tf.distribute.experimental.TPUStrategy)):
+      raise ValueError(
+          'TPUStrategy should not run eagerly as it heavily relies on graph'
+          ' optimization for the distributed system.')
+
+  if eval_input_fn and eval_steps is None:
+    raise ValueError(
+        '`eval_step` is required when `eval_input_fn ` is not none.')
+  if metric_fn and not callable(metric_fn):
+    raise ValueError(
+        'if `metric_fn` is specified, metric_fn must be a callable.')
+
+  total_training_steps = steps_per_epoch * epochs
+  train_iterator = _get_input_iterator(train_input_fn, strategy)
+  eval_loss_metric = tf_keras.metrics.Mean('training_loss', dtype=tf.float32)
+
+  with distribute_utils.get_strategy_scope(strategy):
+    # To correctly place the model weights on accelerators,
+    # model and optimizer should be created in scope.
+    model, sub_model = model_fn()
+    if not hasattr(model, 'optimizer'):
+      raise ValueError('User should set optimizer attribute to model '
+                       'inside `model_fn`.')
+    if sub_model_export_name and sub_model is None:
+      raise ValueError('sub_model_export_name is specified as %s, but '
+                       'sub_model is None.' % sub_model_export_name)
+
+    callback_list = tf_keras.callbacks.CallbackList(
+        callbacks=custom_callbacks, model=model)
+
+    optimizer = model.optimizer
+
+    if init_checkpoint:
+      logging.info(
+          'Checkpoint file %s found and restoring from '
+          'initial checkpoint for core model.', init_checkpoint)
+      checkpoint = tf.train.Checkpoint(model=sub_model, encoder=sub_model)
+      checkpoint.read(init_checkpoint).assert_existing_objects_matched()
+      logging.info('Loading from checkpoint file completed')
+
+    train_loss_metric = tf_keras.metrics.Mean('training_loss', dtype=tf.float32)
+    eval_metrics = metric_fn() if metric_fn else []
+    if not isinstance(eval_metrics, list):
+      eval_metrics = [eval_metrics]
+    # If evaluation is required, make a copy of metric as it will be used by
+    # both train and evaluation.
+    train_metrics = [
+        metric.__class__.from_config(metric.get_config())
+        for metric in eval_metrics
+    ]
+
+    # Create summary writers
+    if _should_export_summary(strategy):
+      summary_dir = os.path.join(model_dir, 'summaries')
+    else:
+      # In multi worker training we need every worker to write summary, because
+      # variables can trigger synchronization on read and synchronization needs
+      # all workers to participate.
+      summary_dir = tempfile.mkdtemp()
+    eval_summary_writer = tf.summary.create_file_writer(
+        os.path.join(summary_dir, 'eval'))
+    last_summary_step = 0
+    if steps_per_loop >= _MIN_SUMMARY_STEPS and train_summary_interval >= 0:
+      # Only writes summary when the stats are collected sufficiently over
+      # enough steps.
+      train_summary_writer = tf.summary.create_file_writer(
+          os.path.join(summary_dir, 'train'))
+    else:
+      train_summary_writer = tf.summary.create_noop_writer()
+
+    # Collects training variables.
+    training_vars = model.trainable_variables
+
+    def _replicated_step(inputs):
+      """"""Replicated training step.""""""
+
+      inputs, labels = inputs
+      with tf.GradientTape() as tape:
+        model_outputs = model(inputs, training=True)
+        loss = loss_fn(labels, model_outputs)
+        # Raw loss is used for reporting in metrics/logs.
+        raw_loss = loss
+        if scale_loss:
+          # Scales down the loss for gradients to be invariant from replicas.
+          loss = loss / strategy.num_replicas_in_sync
+
+      if explicit_allreduce:
+        grad_utils.minimize_using_explicit_allreduce(tape, optimizer, loss,
+                                                     training_vars,
+                                                     pre_allreduce_callbacks,
+                                                     post_allreduce_callbacks,
+                                                     allreduce_bytes_per_pack)
+      else:
+        if isinstance(optimizer, tf_keras.mixed_precision.LossScaleOptimizer):
+          with tape:
+            scaled_loss = optimizer.get_scaled_loss(loss)
+          scaled_grads = tape.gradient(scaled_loss, training_vars)
+          grads = optimizer.get_unscaled_gradients(scaled_grads)
+        else:
+          grads = tape.gradient(loss, training_vars)
+        optimizer.apply_gradients(zip(grads, training_vars))
+      # For reporting, the metric takes the mean of losses.
+      train_loss_metric.update_state(raw_loss)
+      for metric in train_metrics:
+        metric.update_state(labels, model_outputs)
+
+    @tf.function
+    def train_steps(iterator, steps):
+      """"""Performs distributed training steps in a loop.
+
+      Args:
+        iterator: the distributed iterator of training datasets.
+        steps: an tf.int32 integer tensor to specify number of steps to run
+          inside host training loop.
+
+      Raises:
+        ValueError: Any of the arguments or tensor shapes are invalid.
+      """"""
+      if not isinstance(steps, tf.Tensor):
+        raise ValueError('steps should be an Tensor. Python object may cause '
+                         'retracing.')
+
+      for _ in tf.range(steps):
+        strategy.run(_replicated_step, args=(next(iterator),))
+
+    def train_single_step(iterator):
+      """"""Performs a distributed training step.
+
+      Args:
+        iterator: the distributed iterator of training datasets.
+
+      Raises:
+        ValueError: Any of the arguments or tensor shapes are invalid.
+      """"""
+      strategy.run(_replicated_step, args=(next(iterator),))
+
+    def test_step(iterator):
+      """"""Calculates evaluation metrics on distributed devices.""""""
+
+      def _test_step_fn(inputs):
+        """"""Replicated accuracy calculation.""""""
+
+        inputs, labels = inputs
+        model_outputs = model(inputs, training=False)
+        for metric in eval_metrics:
+          metric.update_state(labels, model_outputs)
+        return model_outputs, labels
+
+      outputs, labels = strategy.run(_test_step_fn, args=(next(iterator),))
+      outputs = tf.nest.map_structure(strategy.experimental_local_results,
+                                      outputs)
+      labels = tf.nest.map_structure(strategy.experimental_local_results,
+                                     labels)
+      return outputs, labels
+
+    if not run_eagerly:
+      train_single_step = tf.function(train_single_step)
+      test_step = tf.function(test_step)
+
+    def _run_evaluation(current_training_step, test_iterator):
+      """"""Runs validation steps and aggregate metrics.
+
+      Args:
+        current_training_step: tf.int32 tensor containing the current step.
+        test_iterator: distributed iterator of test datasets.
+
+      Returns:
+        A dict of metic names and values.
+      """"""
+      # The last batch of the evaluation is often smaller than previous ones.
+      # Moreover, in some distributed pieces it might even be empty. Therefore,
+      # different from the way training_loss is calculated, it is needed to
+      # gather all the logits and labels here to calculate the evaluation loss
+      # outside.
+      loss_list, loss_weights = list(), list()
+      for _ in range(eval_steps):
+        outputs, labels = test_step(test_iterator)
+        for cur_logits, cur_labels in zip(outputs, labels):
+          # This is to handle cases when cur_labels is not a single tensor,
+          # but a dict of tensors.
+          cur_weight = tf.shape(tf.nest.flatten(cur_labels)[0])[0]
+          if cur_weight != 0:
+            loss_list.append(loss_fn(cur_labels, cur_logits).numpy())
+            loss_weights.append(cur_weight)
+      # The sample_weights are the actual number of examples in each batch,
+      # a summation of numbers of examples in each replica if using
+      # distributed training.
+      eval_loss_metric.update_state(loss_list, sample_weight=loss_weights)
+
+      logs = {}
+      with eval_summary_writer.as_default():
+        for metric in [eval_loss_metric] + eval_metrics + model.metrics:
+          metric_value = _float_metric_value(metric)
+          logs[metric.name] = metric_value
+          logging.info('Step: [%d] Validation %s = %f', current_training_step,
+                       metric.name, metric_value)
+          tf.summary.scalar(
+              metric.name, metric_value, step=current_training_step)
+        eval_summary_writer.flush()
+
+      return logs
+
+    # Training loop starts here.
+    checkpoint = tf.train.Checkpoint(
+        model=model, optimizer=optimizer, global_step=optimizer.iterations)
+    sub_model_checkpoint = tf.train.Checkpoint(
+        model=sub_model,
+        global_step=optimizer.iterations) if sub_model_export_name else None
+
+    latest_checkpoint_file = tf.train.latest_checkpoint(model_dir)
+    if latest_checkpoint_file:
+      logging.info('Checkpoint file %s found and restoring from '
+                   'checkpoint', latest_checkpoint_file)
+      checkpoint.restore(latest_checkpoint_file)
+      logging.info('Loading from checkpoint file completed')
+
+    current_step = optimizer.iterations.numpy()
+    checkpoint_name = 'ctl_step_{step}.ckpt'
+
+    logs = {}
+    callback_list.on_train_begin()
+    while current_step < total_training_steps and not model.stop_training:
+      if current_step % steps_per_epoch == 0:
+        callback_list.on_epoch_begin(int(current_step / steps_per_epoch) + 1)
+
+      # Training loss/metric are taking average over steps inside micro
+      # training loop. We reset the their values before each round.
+      train_loss_metric.reset_states()
+      for metric in train_metrics + model.metrics:
+        metric.reset_states()
+
+      callback_list.on_batch_begin(current_step)
+      # Runs several steps in the host while loop.
+      steps = steps_to_run(current_step, steps_between_evals, steps_per_loop)
+
+      if tf.config.list_physical_devices('GPU'):
+        # TODO(zongweiz): merge with train_steps once tf.while_loop
+        # GPU performance bugs are fixed.
+        for _ in range(steps):
+          train_single_step(train_iterator)
+      else:
+        # Converts steps to a Tensor to avoid tf.function retracing.
+        train_steps(train_iterator, tf.convert_to_tensor(steps, dtype=tf.int32))
+      train_loss = _float_metric_value(train_loss_metric)
+      current_step += steps
+
+      # Updates training logging.
+      training_status = 'Train Step: %d/%d  / loss = %s' % (
+          current_step, total_training_steps, train_loss)
+
+      if current_step >= last_summary_step + train_summary_interval:
+        summary_writer = train_summary_writer
+        last_summary_step = current_step
+      else:
+        summary_writer = tf.summary.create_noop_writer()
+
+      with summary_writer.as_default():
+        if callable(optimizer.learning_rate):
+          tf.summary.scalar(
+              'learning_rate',
+              optimizer.learning_rate(current_step),
+              step=current_step)
+        tf.summary.scalar(train_loss_metric.name, train_loss, step=current_step)
+        for metric in train_metrics + model.metrics:
+          metric_value = _float_metric_value(metric)
+          training_status += '  %s = %f' % (metric.name, metric_value)
+          tf.summary.scalar(metric.name, metric_value, step=current_step)
+        summary_writer.flush()
+      logging.info(training_status)
+
+      # If no need for evaluation, we only call on_batch_end with train_loss,
+      # this is to ensure we get granular global_step/sec on Tensorboard.
+      if current_step % steps_between_evals:
+        callback_list.on_batch_end(current_step - 1, {'loss': train_loss})
+      else:
+        # Save a submodel with the step in the file name after each epoch.
+        if sub_model_export_name:
+          _save_checkpoint(
+              strategy, sub_model_checkpoint, model_dir,
+              '%s_step_%d.ckpt' % (sub_model_export_name, current_step))
+
+        # Save model checkpoints and run validation steps after each epoch
+        # (with the exception of the final epoch which is handled after the
+        # training loop).
+        if current_step < total_training_steps:
+          _save_checkpoint(strategy, checkpoint, model_dir,
+                           checkpoint_name.format(step=current_step))
+          if eval_input_fn:
+            # Re-initialize evaluation metric.
+            eval_loss_metric.reset_states()
+            for metric in eval_metrics + model.metrics:
+              metric.reset_states()
+
+            logging.info('Running evaluation after step: %s.', current_step)
+            logs = _run_evaluation(current_step,
+                                   _get_input_iterator(eval_input_fn, strategy))
+        # We add train_loss here rather than call on_batch_end twice to make
+        # sure that no duplicated values are generated.
+        logs['loss'] = train_loss
+        callback_list.on_batch_end(current_step - 1, logs)
+
+      # Calls on_epoch_end after each real epoch ends to prevent mis-calculation
+      # of training steps.
+      if current_step % steps_per_epoch == 0:
+        callback_list.on_epoch_end(int(current_step / steps_per_epoch), logs)
+
+    if sub_model_export_name:
+      _save_checkpoint(strategy, sub_model_checkpoint, model_dir,
+                       '%s.ckpt' % sub_model_export_name)
+
+    _save_checkpoint(strategy, checkpoint, model_dir,
+                     checkpoint_name.format(step=current_step))
+    if eval_input_fn:
+      # Re-initialize evaluation metric.
+      eval_loss_metric.reset_states()
+      for metric in eval_metrics + model.metrics:
+        metric.reset_states()
+
+      logging.info('Running final evaluation after training is complete.')
+      logs = _run_evaluation(current_step,
+                             _get_input_iterator(eval_input_fn, strategy))
+    callback_list.on_epoch_end(int(current_step / steps_per_epoch), logs)
+    training_summary = {
+        'total_training_steps': total_training_steps,
+        'train_loss': _float_metric_value(train_loss_metric),
+    }
+    for metric in model.metrics:
+      training_summary[metric.name] = _float_metric_value(metric)
+    if eval_metrics:
+      training_summary['last_train_metrics'] = _float_metric_value(
+          train_metrics[0])
+      training_summary['eval_metrics'] = _float_metric_value(eval_metrics[0])
+
+    write_txt_summary(training_summary, summary_dir)
+
+    if not _should_export_summary(strategy):
+      tf.io.gfile.rmtree(summary_dir)
+
+    callback_list.on_train_end()
+
+    return model","def run_customized_training_loop( _sentinel=None, strategy=None, model_fn=None, loss_fn=None, scale_loss=True, model_dir=None, train_input_fn=None, steps_per_epoch=None, num_eval_per_epoch=1, steps_per_loop=None, epochs=1, eval_input_fn=None, eval_steps=None, metric_fn=None, init_checkpoint=None, custom_callbacks=None, run_eagerly=False, sub_model_export_name=None, explicit_allreduce=False, pre_allreduce_callbacks=None, post_allreduce_callbacks=None, train_summary_interval=0, allreduce_bytes_per_pack=0): if _sentinel is not None: raise ValueError('only call `run_customized_training_loop()` ' 'with named arguments.') required_arguments = [ strategy, model_fn, loss_fn, model_dir, steps_per_epoch, train_input_fn ] steps_between_evals = int(steps_per_epoch / num_eval_per_epoch) if [arg for arg in required_arguments if arg is None]: raise ValueError('`strategy`, `model_fn`, `loss_fn`, `model_dir`, ' '`steps_per_epoch` and `train_input_fn` are required ' 'parameters.') if not steps_per_loop: if tf.config.list_logical_devices('TPU'): steps_per_loop = min(1000, steps_between_evals) else: steps_per_loop = 1 logging.info('steps_per_loop not specified. Using steps_per_loop=%d', steps_per_loop) if steps_per_loop > steps_between_evals: logging.warning( 'steps_per_loop: %d is specified to be greater than ' ' steps_between_evals: %d, we will use steps_between_evals as' ' steps_per_loop.', steps_per_loop, steps_between_evals) steps_per_loop = steps_between_evals assert tf.executing_eagerly() if run_eagerly: if isinstance( strategy, (tf.distribute.TPUStrategy, tf.distribute.experimental.TPUStrategy)): raise ValueError( 'TPUStrategy should not run eagerly as it heavily relies on graph' ' optimization for the distributed system.') if eval_input_fn and eval_steps is None: raise ValueError( '`eval_step` is required when `eval_input_fn ` is not none.') if metric_fn and not callable(metric_fn): raise ValueError( 'if `metric_fn` is specified, metric_fn must be a callable.') total_training_steps = steps_per_epoch * epochs train_iterator = _get_input_iterator(train_input_fn, strategy) eval_loss_metric = tf_keras.metrics.Mean('training_loss', dtype=tf.float32) with distribute_utils.get_strategy_scope(strategy): model, sub_model = model_fn() if not hasattr(model, 'optimizer'): raise ValueError('User should set optimizer attribute to model ' 'inside `model_fn`.') if sub_model_export_name and sub_model is None: raise ValueError('sub_model_export_name is specified as %s, but ' 'sub_model is None.' % sub_model_export_name) callback_list = tf_keras.callbacks.CallbackList( callbacks=custom_callbacks, model=model) optimizer = model.optimizer if init_checkpoint: logging.info( 'Checkpoint file %s found and restoring from ' 'initial checkpoint for core model.', init_checkpoint) checkpoint = tf.train.Checkpoint(model=sub_model, encoder=sub_model) checkpoint.read(init_checkpoint).assert_existing_objects_matched() logging.info('Loading from checkpoint file completed') train_loss_metric = tf_keras.metrics.Mean('training_loss', dtype=tf.float32) eval_metrics = metric_fn() if metric_fn else [] if not isinstance(eval_metrics, list): eval_metrics = [eval_metrics] train_metrics = [ metric.__class__.from_config(metric.get_config()) for metric in eval_metrics ] if _should_export_summary(strategy): summary_dir = os.path.join(model_dir, 'summaries') else: summary_dir = tempfile.mkdtemp() eval_summary_writer = tf.summary.create_file_writer( os.path.join(summary_dir, 'eval')) last_summary_step = 0 if steps_per_loop >= _MIN_SUMMARY_STEPS and train_summary_interval >= 0: train_summary_writer = tf.summary.create_file_writer( os.path.join(summary_dir, 'train')) else: train_summary_writer = tf.summary.create_noop_writer() training_vars = model.trainable_variables def _replicated_step(inputs): inputs, labels = inputs with tf.GradientTape() as tape: model_outputs = model(inputs, training=True) loss = loss_fn(labels, model_outputs) raw_loss = loss if scale_loss: loss = loss / strategy.num_replicas_in_sync if explicit_allreduce: grad_utils.minimize_using_explicit_allreduce(tape, optimizer, loss, training_vars, pre_allreduce_callbacks, post_allreduce_callbacks, allreduce_bytes_per_pack) else: if isinstance(optimizer, tf_keras.mixed_precision.LossScaleOptimizer): with tape: scaled_loss = optimizer.get_scaled_loss(loss) scaled_grads = tape.gradient(scaled_loss, training_vars) grads = optimizer.get_unscaled_gradients(scaled_grads) else: grads = tape.gradient(loss, training_vars) optimizer.apply_gradients(zip(grads, training_vars)) train_loss_metric.update_state(raw_loss) for metric in train_metrics: metric.update_state(labels, model_outputs) @tf.function def train_steps(iterator, steps): if not isinstance(steps, tf.Tensor): raise ValueError('steps should be an Tensor. Python object may cause ' 'retracing.') for _ in tf.range(steps): strategy.run(_replicated_step, args=(next(iterator),)) def train_single_step(iterator): strategy.run(_replicated_step, args=(next(iterator),)) def test_step(iterator): def _test_step_fn(inputs): inputs, labels = inputs model_outputs = model(inputs, training=False) for metric in eval_metrics: metric.update_state(labels, model_outputs) return model_outputs, labels outputs, labels = strategy.run(_test_step_fn, args=(next(iterator),)) outputs = tf.nest.map_structure(strategy.experimental_local_results, outputs) labels = tf.nest.map_structure(strategy.experimental_local_results, labels) return outputs, labels if not run_eagerly: train_single_step = tf.function(train_single_step) test_step = tf.function(test_step) def _run_evaluation(current_training_step, test_iterator): loss_list, loss_weights = list(), list() for _ in range(eval_steps): outputs, labels = test_step(test_iterator) for cur_logits, cur_labels in zip(outputs, labels): cur_weight = tf.shape(tf.nest.flatten(cur_labels)[0])[0] if cur_weight != 0: loss_list.append(loss_fn(cur_labels, cur_logits).numpy()) loss_weights.append(cur_weight) eval_loss_metric.update_state(loss_list, sample_weight=loss_weights) logs = {} with eval_summary_writer.as_default(): for metric in [eval_loss_metric] + eval_metrics + model.metrics: metric_value = _float_metric_value(metric) logs[metric.name] = metric_value logging.info('Step: [%d] Validation %s = %f', current_training_step, metric.name, metric_value) tf.summary.scalar( metric.name, metric_value, step=current_training_step) eval_summary_writer.flush() return logs checkpoint = tf.train.Checkpoint( model=model, optimizer=optimizer, global_step=optimizer.iterations) sub_model_checkpoint = tf.train.Checkpoint( model=sub_model, global_step=optimizer.iterations) if sub_model_export_name else None latest_checkpoint_file = tf.train.latest_checkpoint(model_dir) if latest_checkpoint_file: logging.info('Checkpoint file %s found and restoring from ' 'checkpoint', latest_checkpoint_file) checkpoint.restore(latest_checkpoint_file) logging.info('Loading from checkpoint file completed') current_step = optimizer.iterations.numpy() checkpoint_name = 'ctl_step_{step}.ckpt' logs = {} callback_list.on_train_begin() while current_step < total_training_steps and not model.stop_training: if current_step % steps_per_epoch == 0: callback_list.on_epoch_begin(int(current_step / steps_per_epoch) + 1) train_loss_metric.reset_states() for metric in train_metrics + model.metrics: metric.reset_states() callback_list.on_batch_begin(current_step) steps = steps_to_run(current_step, steps_between_evals, steps_per_loop) if tf.config.list_physical_devices('GPU'): for _ in range(steps): train_single_step(train_iterator) else: train_steps(train_iterator, tf.convert_to_tensor(steps, dtype=tf.int32)) train_loss = _float_metric_value(train_loss_metric) current_step += steps training_status = 'Train Step: %d/%d / loss = %s' % ( current_step, total_training_steps, train_loss) if current_step >= last_summary_step + train_summary_interval: summary_writer = train_summary_writer last_summary_step = current_step else: summary_writer = tf.summary.create_noop_writer() with summary_writer.as_default(): if callable(optimizer.learning_rate): tf.summary.scalar( 'learning_rate', optimizer.learning_rate(current_step), step=current_step) tf.summary.scalar(train_loss_metric.name, train_loss, step=current_step) for metric in train_metrics + model.metrics: metric_value = _float_metric_value(metric) training_status += ' %s = %f' % (metric.name, metric_value) tf.summary.scalar(metric.name, metric_value, step=current_step) summary_writer.flush() logging.info(training_status) if current_step % steps_between_evals: callback_list.on_batch_end(current_step - 1, {'loss': train_loss}) else: if sub_model_export_name: _save_checkpoint( strategy, sub_model_checkpoint, model_dir, '%s_step_%d.ckpt' % (sub_model_export_name, current_step)) if current_step < total_training_steps: _save_checkpoint(strategy, checkpoint, model_dir, checkpoint_name.format(step=current_step)) if eval_input_fn: eval_loss_metric.reset_states() for metric in eval_metrics + model.metrics: metric.reset_states() logging.info('Running evaluation after step: %s.', current_step) logs = _run_evaluation(current_step, _get_input_iterator(eval_input_fn, strategy)) logs['loss'] = train_loss callback_list.on_batch_end(current_step - 1, logs) if current_step % steps_per_epoch == 0: callback_list.on_epoch_end(int(current_step / steps_per_epoch), logs) if sub_model_export_name: _save_checkpoint(strategy, sub_model_checkpoint, model_dir, '%s.ckpt' % sub_model_export_name) _save_checkpoint(strategy, checkpoint, model_dir, checkpoint_name.format(step=current_step)) if eval_input_fn: eval_loss_metric.reset_states() for metric in eval_metrics + model.metrics: metric.reset_states() logging.info('Running final evaluation after training is complete.') logs = _run_evaluation(current_step, _get_input_iterator(eval_input_fn, strategy)) callback_list.on_epoch_end(int(current_step / steps_per_epoch), logs) training_summary = { 'total_training_steps': total_training_steps, 'train_loss': _float_metric_value(train_loss_metric), } for metric in model.metrics: training_summary[metric.name] = _float_metric_value(metric) if eval_metrics: training_summary['last_train_metrics'] = _float_metric_value( train_metrics[0]) training_summary['eval_metrics'] = _float_metric_value(eval_metrics[0]) write_txt_summary(training_summary, summary_dir) if not _should_export_summary(strategy): tf.io.gfile.rmtree(summary_dir) callback_list.on_train_end() return model"
+_replicated_step,"def _replicated_step(inputs):
+      """"""Replicated training step.""""""
+
+      inputs, labels = inputs
+      with tf.GradientTape() as tape:
+        model_outputs = model(inputs, training=True)
+        loss = loss_fn(labels, model_outputs)
+        # Raw loss is used for reporting in metrics/logs.
+        raw_loss = loss
+        if scale_loss:
+          # Scales down the loss for gradients to be invariant from replicas.
+          loss = loss / strategy.num_replicas_in_sync
+
+      if explicit_allreduce:
+        grad_utils.minimize_using_explicit_allreduce(tape, optimizer, loss,
+                                                     training_vars,
+                                                     pre_allreduce_callbacks,
+                                                     post_allreduce_callbacks,
+                                                     allreduce_bytes_per_pack)
+      else:
+        if isinstance(optimizer, tf_keras.mixed_precision.LossScaleOptimizer):
+          with tape:
+            scaled_loss = optimizer.get_scaled_loss(loss)
+          scaled_grads = tape.gradient(scaled_loss, training_vars)
+          grads = optimizer.get_unscaled_gradients(scaled_grads)
+        else:
+          grads = tape.gradient(loss, training_vars)
+        optimizer.apply_gradients(zip(grads, training_vars))
+      # For reporting, the metric takes the mean of losses.
+      train_loss_metric.update_state(raw_loss)
+      for metric in train_metrics:
+        metric.update_state(labels, model_outputs)","def _replicated_step(inputs): inputs, labels = inputs with tf.GradientTape() as tape: model_outputs = model(inputs, training=True) loss = loss_fn(labels, model_outputs) raw_loss = loss if scale_loss: loss = loss / strategy.num_replicas_in_sync if explicit_allreduce: grad_utils.minimize_using_explicit_allreduce(tape, optimizer, loss, training_vars, pre_allreduce_callbacks, post_allreduce_callbacks, allreduce_bytes_per_pack) else: if isinstance(optimizer, tf_keras.mixed_precision.LossScaleOptimizer): with tape: scaled_loss = optimizer.get_scaled_loss(loss) scaled_grads = tape.gradient(scaled_loss, training_vars) grads = optimizer.get_unscaled_gradients(scaled_grads) else: grads = tape.gradient(loss, training_vars) optimizer.apply_gradients(zip(grads, training_vars)) train_loss_metric.update_state(raw_loss) for metric in train_metrics: metric.update_state(labels, model_outputs)"
+train_steps,"def train_steps(iterator, steps):
+      """"""Performs distributed training steps in a loop.
+
+      Args:
+        iterator: the distributed iterator of training datasets.
+        steps: an tf.int32 integer tensor to specify number of steps to run
+          inside host training loop.
+
+      Raises:
+        ValueError: Any of the arguments or tensor shapes are invalid.
+      """"""
+      if not isinstance(steps, tf.Tensor):
+        raise ValueError('steps should be an Tensor. Python object may cause '
+                         'retracing.')
+
+      for _ in tf.range(steps):
+        strategy.run(_replicated_step, args=(next(iterator),))","def train_steps(iterator, steps): if not isinstance(steps, tf.Tensor): raise ValueError('steps should be an Tensor. Python object may cause ' 'retracing.') for _ in tf.range(steps): strategy.run(_replicated_step, args=(next(iterator),))"
+train_single_step,"def train_single_step(iterator):
+      """"""Performs a distributed training step.
+
+      Args:
+        iterator: the distributed iterator of training datasets.
+
+      Raises:
+        ValueError: Any of the arguments or tensor shapes are invalid.
+      """"""
+      strategy.run(_replicated_step, args=(next(iterator),))","def train_single_step(iterator): strategy.run(_replicated_step, args=(next(iterator),))"
+test_step,"def test_step(iterator):
+      """"""Calculates evaluation metrics on distributed devices.""""""
+
+      def _test_step_fn(inputs):
+        """"""Replicated accuracy calculation.""""""
+
+        inputs, labels = inputs
+        model_outputs = model(inputs, training=False)
+        for metric in eval_metrics:
+          metric.update_state(labels, model_outputs)
+        return model_outputs, labels
+
+      outputs, labels = strategy.run(_test_step_fn, args=(next(iterator),))
+      outputs = tf.nest.map_structure(strategy.experimental_local_results,
+                                      outputs)
+      labels = tf.nest.map_structure(strategy.experimental_local_results,
+                                     labels)
+      return outputs, labels","def test_step(iterator): def _test_step_fn(inputs): inputs, labels = inputs model_outputs = model(inputs, training=False) for metric in eval_metrics: metric.update_state(labels, model_outputs) return model_outputs, labels outputs, labels = strategy.run(_test_step_fn, args=(next(iterator),)) outputs = tf.nest.map_structure(strategy.experimental_local_results, outputs) labels = tf.nest.map_structure(strategy.experimental_local_results, labels) return outputs, labels"
+_run_evaluation,"def _run_evaluation(current_training_step, test_iterator):
+      """"""Runs validation steps and aggregate metrics.
+
+      Args:
+        current_training_step: tf.int32 tensor containing the current step.
+        test_iterator: distributed iterator of test datasets.
+
+      Returns:
+        A dict of metic names and values.
+      """"""
+      # The last batch of the evaluation is often smaller than previous ones.
+      # Moreover, in some distributed pieces it might even be empty. Therefore,
+      # different from the way training_loss is calculated, it is needed to
+      # gather all the logits and labels here to calculate the evaluation loss
+      # outside.
+      loss_list, loss_weights = list(), list()
+      for _ in range(eval_steps):
+        outputs, labels = test_step(test_iterator)
+        for cur_logits, cur_labels in zip(outputs, labels):
+          # This is to handle cases when cur_labels is not a single tensor,
+          # but a dict of tensors.
+          cur_weight = tf.shape(tf.nest.flatten(cur_labels)[0])[0]
+          if cur_weight != 0:
+            loss_list.append(loss_fn(cur_labels, cur_logits).numpy())
+            loss_weights.append(cur_weight)
+      # The sample_weights are the actual number of examples in each batch,
+      # a summation of numbers of examples in each replica if using
+      # distributed training.
+      eval_loss_metric.update_state(loss_list, sample_weight=loss_weights)
+
+      logs = {}
+      with eval_summary_writer.as_default():
+        for metric in [eval_loss_metric] + eval_metrics + model.metrics:
+          metric_value = _float_metric_value(metric)
+          logs[metric.name] = metric_value
+          logging.info('Step: [%d] Validation %s = %f', current_training_step,
+                       metric.name, metric_value)
+          tf.summary.scalar(
+              metric.name, metric_value, step=current_training_step)
+        eval_summary_writer.flush()
+
+      return logs","def _run_evaluation(current_training_step, test_iterator): loss_list, loss_weights = list(), list() for _ in range(eval_steps): outputs, labels = test_step(test_iterator) for cur_logits, cur_labels in zip(outputs, labels): cur_weight = tf.shape(tf.nest.flatten(cur_labels)[0])[0] if cur_weight != 0: loss_list.append(loss_fn(cur_labels, cur_logits).numpy()) loss_weights.append(cur_weight) eval_loss_metric.update_state(loss_list, sample_weight=loss_weights) logs = {} with eval_summary_writer.as_default(): for metric in [eval_loss_metric] + eval_metrics + model.metrics: metric_value = _float_metric_value(metric) logs[metric.name] = metric_value logging.info('Step: [%d] Validation %s = %f', current_training_step, metric.name, metric_value) tf.summary.scalar( metric.name, metric_value, step=current_training_step) eval_summary_writer.flush() return logs"
+_test_step_fn,"def _test_step_fn(inputs):
+        """"""Replicated accuracy calculation.""""""
+
+        inputs, labels = inputs
+        model_outputs = model(inputs, training=False)
+        for metric in eval_metrics:
+          metric.update_state(labels, model_outputs)
+        return model_outputs, labels","def _test_step_fn(inputs): inputs, labels = inputs model_outputs = model(inputs, training=False) for metric in eval_metrics: metric.update_state(labels, model_outputs) return model_outputs, labels"
